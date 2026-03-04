@@ -18,6 +18,7 @@ import {
     Shield,
     TrendingUp,
     RefreshCw,
+    Download,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 
@@ -100,6 +101,8 @@ export default function EditorPage() {
     const [currentStage, setCurrentStage] = useState<string>('')
     const [currentProgress, setCurrentProgress] = useState<number>(0)
     const abortRef = useRef<AbortController | null>(null)
+
+    const [exporting, setExporting] = useState(false)
 
     const supabase = createClient()
 
@@ -480,6 +483,44 @@ export default function EditorPage() {
                     >
                         <Sparkles className="w-4 h-4" />
                         Generate All ({pendingCount})
+                    </button>
+                )}
+
+                {/* Export Proposal button */}
+                {selectedRFP && completedCount > 0 && (
+                    <button
+                        onClick={async () => {
+                            setExporting(true)
+                            try {
+                                const resp = await fetch(`/api/export-proposal?rfp_id=${selectedRFP}`)
+                                if (!resp.ok) {
+                                    const errBody = await resp.json().catch(() => ({ error: 'Export failed' }))
+                                    throw new Error(errBody.error)
+                                }
+                                const blob = await resp.blob()
+                                const url = URL.createObjectURL(blob)
+                                const a = document.createElement('a')
+                                a.href = url
+                                a.download = resp.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'proposal.docx'
+                                document.body.appendChild(a)
+                                a.click()
+                                a.remove()
+                                URL.revokeObjectURL(url)
+                            } catch (err) {
+                                console.error('[editor] Export failed:', err)
+                            } finally {
+                                setExporting(false)
+                            }
+                        }}
+                        disabled={exporting}
+                        className="w-full mt-2 px-4 py-2.5 rounded-xl bg-secondary text-sm font-medium hover:bg-accent transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                        {exporting ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                            <Download className="w-4 h-4" />
+                        )}
+                        {exporting ? 'Exporting…' : 'Export Proposal'}
                     </button>
                 )}
             </div>
