@@ -281,3 +281,175 @@ The style profile feeds directly into **Layer 3 (Company Conditioning)** of the 
 - User approval workflow (`is_user_approved` flag on chunks)
 - Reuse tracking — `reuse_count` increments each time a chunk is matched
 - `last_used_at` timestamp for recency signals
+
+---
+
+# Deploy 4 — Analytics, Cost Controls & Production Hardening
+
+> **Scope:** Usage monitoring, plan enforcement, cost controls, billing integration, and production infrastructure.
+
+## 4.1 Plan System
+
+Two-tier plan architecture configured in `lib/plans/enforcement.ts`:
+
+| Feature | Starter | Growth |
+|---------|---------|--------|
+| RFPs per month | Limited | Unlimited (`null`) |
+| Knowledge vault | Limited MB | Higher limit |
+| Advanced analytics | ❌ | ✅ |
+
+**Enforcement Points:**
+- `create_rfp` — Checks monthly RFP count against plan limit
+- `process_clause` — Per-RFP clause processing (no hard limit)
+- `upload_knowledge` — Checks vault storage against MB limit
+
+**Upgrade Nudges** — Triggered at 80% RFP usage and 85% vault capacity.
+
+## 4.2 Cost Control System (4 Modules)
+
+| Module | File | Purpose |
+|--------|------|---------|
+| **Token Manager** | `lib/cost/token-manager.ts` | Estimates token usage (4 chars/token), enforces hard caps (4000 input + 1024 output), clause length limits (1500 chars), and cost estimation using Gemini Flash pricing |
+| **Usage Tracker** | `lib/cost/usage-tracker.ts` | Logs per-action telemetry (tenant, action, tokens, latency, cost), monthly cost threshold checks ($50 default) |
+| **Rate Limiter** | `lib/cost/rate-limiter.ts` | Prevents API abuse at the tenant level |
+| **Embedding Cache** | `lib/cost/embedding-cache.ts` | SHA-256 hash-based deduplication; reuses cached embeddings instead of calling the API |
+
+### Token Budget Breakdown
+
+```
+Total Budget = Input (4000) + Output (1024) = 5024 tokens
+
+Input allocation:
+├── Clause text:     variable
+├── Context matches: variable (max 1200 tokens)
+├── System prompt:   ~500 tokens
+└── Output budget:   1024 tokens
+```
+
+### Cost Estimation
+
+Using Gemini 2.0 Flash pricing:
+- Input: $0.075 per million tokens
+- Output: $0.30 per million tokens
+- Per-request estimate: `(input/1000 × $0.000075) + (output/1000 × $0.0003)`
+
+## 4.3 Analytics Dashboard
+
+The analytics page at `/dashboard/analytics` tracks:
+- **Win Rate** — Percentage of proposals resulting in wins
+- **Active RFPs** — Documents currently in processing pipeline
+- **Average Confidence** — Mean confidence score across all generated responses
+- **Response Time** — Average time from upload to completed draft
+- **Clause Reuse Patterns** — Which knowledge chunks are reused most frequently
+
+Built with **Recharts** for interactive data visualization.
+
+## 4.4 Security & Multi-Tenancy
+
+| Measure | Implementation |
+|---------|---------------|
+| **Row-Level Security** | RLS on 5 core tables — data never leaks between tenants |
+| **Tenant Namespacing** | Qdrant vector queries filtered by `tenant_id` |
+| **Token Encryption** | Gmail OAuth tokens stored as encrypted text |
+| **Auth Middleware** | Every request validated via Supabase SSR cookies |
+| **Role-Based Access** | 3 roles: admin, member, viewer |
+| **Input Validation** | Zod schemas + manual validation on all API routes |
+| **HTTPS** | Enforced via Vercel deployment |
+
+## 4.5 Production Deployment
+
+**Platform:** Vercel (Next.js native)
+
+**Environment Variables Required:**
+
+| Variable | Purpose |
+|----------|---------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key |
+| `GEMINI_API_KEY` | Google AI API key |
+| `QDRANT_URL` | Qdrant Cloud instance |
+| `QDRANT_API_KEY` | Qdrant authentication |
+| `GOOGLE_CLIENT_ID` | Gmail OAuth client |
+| `GOOGLE_CLIENT_SECRET` | Gmail OAuth secret |
+| `STRIPE_SECRET_KEY` | Stripe billing |
+
+---
+
+## API Reference
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/api/upload-rfp` | ✅ | Upload RFP document to storage |
+| POST | `/api/process-rfp` | ✅ | Parse document into clauses + embeddings |
+| POST | `/api/generate-clause` | ✅ | Generate AI response for a clause (SSE stream) |
+| POST | `/api/upload-knowledge` | ✅ | Add document to knowledge vault |
+| POST | `/api/train-organization` | ✅ | Train style profile from documents |
+| POST | `/api/connect-gmail` | ✅ | Initiate Gmail OAuth flow |
+| GET | `/api/gmail-callback` | — | OAuth callback handler |
+| POST | `/api/scan-inbox` | ✅ | Scan connected inbox for RFPs |
+
+---
+
+## File Map
+
+```
+AeonRFP/
+├── app/
+│   ├── page.tsx                    # Landing page
+│   ├── login/page.tsx              # Auth: login
+│   ├── signup/page.tsx             # Auth: signup
+│   ├── api/
+│   │   ├── upload-rfp/             # Document upload
+│   │   ├── process-rfp/            # RFP parsing pipeline
+│   │   ├── generate-clause/        # AI generation (SSE)
+│   │   ├── upload-knowledge/       # Knowledge vault upload
+│   │   ├── train-organization/     # Style profile training
+│   │   ├── connect-gmail/          # Gmail OAuth init
+│   │   ├── gmail-callback/         # OAuth callback
+│   │   └── scan-inbox/             # Inbox scanner
+│   └── dashboard/
+│       ├── page.tsx                # Overview with stats
+│       ├── upload/                 # RFP upload UI
+│       ├── clauses/                # Clause intelligence viewer
+│       ├── editor/                 # Draft response editor
+│       ├── analytics/              # Performance charts
+│       ├── knowledge/              # Knowledge vault manager
+│       ├── gmail/                  # Gmail integration hub
+│       ├── processing/             # RFP processing queue
+│       └── settings/               # Account & plan settings
+├── lib/
+│   ├── ai/
+│   │   ├── client.ts               # Gemini 2.0 Flash integration
+│   │   ├── prompt-builder.ts       # 4-layer prompt system
+│   │   └── validation.ts           # JSON response validation
+│   ├── smartmatch/
+│   │   ├── embedding.ts            # Vector generation + caching
+│   │   ├── search.ts               # Qdrant tenant-namespaced search
+│   │   ├── rerank.ts               # 4-signal re-ranking
+│   │   ├── compress.ts             # Token-budget context compression
+│   │   ├── confidence.ts           # Multi-factor confidence scoring
+│   │   └── normalize.ts            # Clause text normalization
+│   ├── classification/
+│   │   ├── heuristic.ts            # Stage 1: keyword-based RFP detection
+│   │   └── decision-controller.ts  # Multi-stage classification orchestrator
+│   ├── training/
+│   │   └── style-profile.ts        # Formality, tone, phrase extraction
+│   ├── cost/
+│   │   ├── token-manager.ts        # Token budgets & cost estimation
+│   │   ├── usage-tracker.ts        # Per-tenant usage telemetry
+│   │   ├── rate-limiter.ts         # API rate limiting
+│   │   └── embedding-cache.ts      # Hash-based embedding dedup
+│   ├── plans/
+│   │   └── enforcement.ts          # Plan limits & upgrade nudges
+│   └── supabase/
+│       ├── schema.sql              # 14-table schema with RLS
+│       ├── server.ts               # Server-side Supabase client
+│       ├── client.ts               # Browser-side Supabase client
+│       └── middleware.ts           # Auth session management
+└── types/
+    └── database.ts                 # TypeScript types & plan configs
+```
+
+---
+
+*Built by Aeonark Labs · Confidential*
