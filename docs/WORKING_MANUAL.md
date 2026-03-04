@@ -199,3 +199,85 @@ The prompt builder in `lib/ai/prompt-builder.ts` constructs enterprise-grade pro
 - Top-P: 0.8
 - Response format: `application/json`
 - Retry: up to 2 retries with exponential backoff
+
+---
+
+# Deploy 3 — Integrations & Automation
+
+> **Scope:** Gmail inbox scanning, email classification pipeline, organization training, knowledge vault management, and style profiling.
+
+## 3.1 Gmail Integration
+
+### OAuth Connection Flow
+
+| Endpoint | Purpose |
+|----------|---------|
+| `app/api/connect-gmail/route.ts` | Initiates Google OAuth 2.0 flow with `gmail.readonly` scope |
+| `app/api/gmail-callback/route.ts` | Exchanges auth code for tokens, stores encrypted tokens in `gmail_connections` |
+
+### Inbox Scanner
+
+**Entry Point:** `app/api/scan-inbox/route.ts`
+
+**Flow:**
+1. Fetch latest 20 emails from Gmail API
+2. Deduplicate against `email_logs` table
+3. Extract subject, sender, snippet, and attachment filenames
+4. Classify each email through the classification pipeline
+5. Store results in `email_logs` with classification metadata
+6. Return scan summary: total scanned, RFPs detected, per-email results
+
+**Dashboard:** The Gmail Hub page (`/dashboard/gmail`) provides scan controls, connection status, and detected RFP list.
+
+## 3.2 Email Classification Pipeline
+
+The classification system uses a **staged approach** controlled by `lib/classification/decision-controller.ts`:
+
+### Stage 1: Heuristic Filter
+
+`lib/classification/heuristic.ts` performs fast keyword-based detection:
+
+| Signal | Keywords Checked | Max Score |
+|--------|-----------------|-----------|
+| **Subject** | 13 terms: rfp, rfi, rfq, tender, proposal, bid, solicitation… | 30 points |
+| **Body** | 16 terms: deadline, scope of work, evaluation criteria, sealed bid… | 30 points |
+| **Attachments** | 7 filename patterns: rfp, tender, sow… | 20 points |
+| **Has Attachment** | Any attachment present | 10 points |
+
+**Decision Logic:**
+- Score ≥ 50 → **Likely RFP** (confidence capped at 65, passed to next stage)
+- Score ≤ 10 → **Not RFP** (confidence 90+)
+- Score 11–49 → **Ambiguous** (forwarded to ML/AI classification stage)
+
+### Stage 2+: ML & AI Classification (Architecture Ready)
+
+The `classifyEmail` controller is designed for multi-stage escalation: heuristic → ML → AI. The ML and AI stages are extension points for production.
+
+## 3.3 Organization Training
+
+**Entry Point:** `app/api/train-organization/route.ts`
+
+Trains AeonRFP on an organization's writing style by analyzing uploaded documents:
+
+1. **Document Upload** — Past RFP responses, company policies, capability statements
+2. **Style Analysis** — `lib/training/style-profile.ts` computes:
+   - **Average sentence length** (word count per sentence)
+   - **Common phrases** — Top-20 bigrams appearing 3+ times
+   - **Formality score** (0–1) — Measures formal vs. informal language, passive voice ratio
+   - **Tone vector** — Scores across 4 dimensions: confident, cautious, technical, professional
+3. **Profile Storage** — Saved to `style_profile` table, one per tenant
+
+The style profile feeds directly into **Layer 3 (Company Conditioning)** of the prompt system, ensuring AI-generated responses match the organization's voice.
+
+## 3.4 Knowledge Vault
+
+**Entry Points:**
+- `app/api/upload-knowledge/route.ts` — Upload reference documents
+- Dashboard: `/dashboard/knowledge` — Browse and manage knowledge base
+
+**Features:**
+- File deduplication via SHA hash (`UNIQUE(tenant_id, file_hash)`)
+- Chunking into knowledge fragments with clause type classification
+- User approval workflow (`is_user_approved` flag on chunks)
+- Reuse tracking — `reuse_count` increments each time a chunk is matched
+- `last_used_at` timestamp for recency signals
