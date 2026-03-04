@@ -17,7 +17,7 @@
 
 ---
 
-*Built by [Aeonark Labs](https://github.com/aeonark) — Enterprise AI for proposal teams*
+*Built by [Aeonark Labs](https://aeonark.tech) — Enterprise AI for proposal teams*
 
 </div>
 
