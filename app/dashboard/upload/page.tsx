@@ -182,8 +182,8 @@ export default function UploadPage() {
                     handleFiles(e.dataTransfer.files)
                 }}
                 className={`relative border-2 border-dashed rounded-2xl p-12 text-center transition-all duration-300 ${dragOver
-                        ? 'border-aeon-blue bg-aeon-blue/5 scale-[1.01]'
-                        : 'border-border/60 hover:border-border'
+                    ? 'border-aeon-blue bg-aeon-blue/5 scale-[1.01]'
+                    : 'border-border/60 hover:border-border'
                     }`}
             >
                 <div className="flex flex-col items-center gap-4">
@@ -193,8 +193,8 @@ export default function UploadPage() {
                     >
                         <Upload
                             className={`w-7 h-7 transition-colors ${dragOver
-                                    ? 'text-aeon-blue'
-                                    : 'text-muted-foreground'
+                                ? 'text-aeon-blue'
+                                : 'text-muted-foreground'
                                 }`}
                         />
                     </div>
@@ -258,9 +258,9 @@ export default function UploadPage() {
                                             <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
                                                 <div
                                                     className={`h-full rounded-full transition-all duration-700 ${file.status ===
-                                                            'complete'
-                                                            ? 'bg-aeon-emerald'
-                                                            : 'bg-gradient-to-r from-aeon-blue to-aeon-violet'
+                                                        'complete'
+                                                        ? 'bg-aeon-emerald'
+                                                        : 'bg-gradient-to-r from-aeon-blue to-aeon-violet'
                                                         }`}
                                                     style={{
                                                         width: `${file.progress}%`,
@@ -291,7 +291,7 @@ export default function UploadPage() {
                                                         <Loader2 className="w-3 h-3 text-aeon-blue animate-spin" />
                                                     )}
                                                 {file.status ===
-                                                    'processing' && (
+                                                    'uploading' && (
                                                         <Sparkles className="w-3 h-3 text-aeon-blue animate-pulse" />
                                                     )}
                                                 <span className="text-xs text-muted-foreground">
