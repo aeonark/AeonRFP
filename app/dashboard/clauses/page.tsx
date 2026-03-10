@@ -16,6 +16,93 @@ import {
     Inbox,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { isSupabasePlaceholder } from '@/lib/supabase/is-placeholder'
+
+// ============================================
+// Demo data (used when Supabase is not configured)
+// ============================================
+
+const DEMO_RFPS: RFPDocument[] = [
+    { id: 'demo-rfp-1', title: 'DOD Cybersecurity Framework RFP', status: 'completed', clause_count: 8, created_at: new Date(Date.now() - 7200000).toISOString() },
+    { id: 'demo-rfp-2', title: 'Healthcare IT Modernization', status: 'processing', clause_count: 5, created_at: new Date(Date.now() - 14400000).toISOString() },
+]
+
+const DEMO_CLAUSES: Record<string, Clause[]> = {
+    'demo-rfp-1': [
+        {
+            id: 'c1', clause_index: 1, clause_type: 'compliance',
+            clause_text: 'The contractor shall comply with NIST SP 800-171 Rev 2 for all Controlled Unclassified Information (CUI) handling, storage, and transmission across all systems.',
+            confidence_score: 94, risk_flag: 'low', status: 'complete',
+            generated_answer: 'Aeonark Labs maintains full compliance with NIST SP 800-171 Rev 2. Our infrastructure implements all 110 security requirements across 14 control families. We conduct annual third-party assessments and maintain a current System Security Plan (SSP) and Plan of Action & Milestones (POA&M). All CUI is encrypted at rest (AES-256) and in transit (TLS 1.3).',
+            reasoning_summary: 'High confidence — direct policy match from knowledge base with 3 prior winning responses referencing NIST 800-171 compliance.',
+        },
+        {
+            id: 'c2', clause_index: 2, clause_type: 'technical',
+            clause_text: 'The solution must provide real-time threat detection with sub-second response capabilities and integrate with existing SIEM infrastructure via standard protocols.',
+            confidence_score: 87, risk_flag: 'medium', status: 'complete',
+            generated_answer: 'Our platform features AI-powered threat detection with average response times of 200ms. We support native integration with Splunk, QRadar, and Microsoft Sentinel via CEF/LEEF syslog and REST API connectors. Our detection engine processes 50,000+ events per second with a 99.7% true positive rate.',
+            reasoning_summary: 'Good match from technical capabilities brief. Medium risk flagged due to sub-second requirement — our avg 200ms meets it but edge cases may exceed.',
+        },
+        {
+            id: 'c3', clause_index: 3, clause_type: 'financial',
+            clause_text: 'Provide a detailed cost breakdown including licensing, implementation, training, and 3-year total cost of ownership (TCO) for a 10,000-user deployment.',
+            confidence_score: 72, risk_flag: 'medium', status: 'complete',
+            generated_answer: 'Year 1: $2.4M (licensing: $1.8M, implementation: $400K, training: $200K). Year 2-3: $1.9M/year (licensing: $1.6M, support: $300K). 3-Year TCO: $6.2M or $207/user/year. Volume discounts of 15% available for 3-year commitment. Implementation includes 90-day deployment with dedicated project manager.',
+            reasoning_summary: 'Moderate confidence — pricing aligned with historical proposals but 10K user scale is new territory. Costs extrapolated from 5K-user baseline.',
+        },
+        {
+            id: 'c4', clause_index: 4, clause_type: 'operational',
+            clause_text: 'The vendor shall maintain 99.99% uptime SLA with defined penalties for non-compliance, including service credits and escalation procedures.',
+            confidence_score: 91, risk_flag: 'low', status: 'complete',
+            generated_answer: 'Aeonark Labs guarantees 99.99% uptime (52.56 minutes max downtime/year) backed by our enterprise SLA. Service credits: 10% for 99.95-99.99%, 25% for 99.9-99.95%, 50% for below 99.9%. Escalation: L1 within 15 min, L2 within 1 hour, VP-level within 4 hours. Our trailing 12-month uptime is 99.997%.',
+            reasoning_summary: 'High confidence — SLA template directly matches our standard enterprise terms with strong historical performance data.',
+        },
+        {
+            id: 'c5', clause_index: 5, clause_type: 'compliance',
+            clause_text: 'All personnel with access to government systems must hold active Secret clearance. Provide evidence of facility clearance level.',
+            confidence_score: 88, risk_flag: 'low', status: 'complete',
+            generated_answer: 'Aeonark Labs holds a Facility Clearance Level (FCL) of Secret. 100% of our government-facing engineering team maintains active Secret clearances (42 personnel). Our FSO manages continuous vetting through DCSA. Clearance verification available upon request through the DISS system.',
+            reasoning_summary: 'Strong match — clearance data verified against company capability statements and prior proposals.',
+        },
+        {
+            id: 'c6', clause_index: 6, clause_type: 'technical',
+            clause_text: 'The system must support FedRAMP High authorization baseline and operate within an AWS GovCloud or equivalent IL5 environment.',
+            confidence_score: 82, risk_flag: 'low', status: 'complete',
+            generated_answer: 'Our platform is currently FedRAMP High authorized (package ID: FR2024-0847). We operate exclusively on AWS GovCloud (US) regions us-gov-west-1 and us-gov-east-1, meeting IL5 requirements. All data sovereignty controls are in place with no data leaving US jurisdictional boundaries.',
+            reasoning_summary: 'High confidence — FedRAMP authorization is current. Matched against compliance documentation and 2 prior IL5 deployment proposals.',
+        },
+        {
+            id: 'c7', clause_index: 7, clause_type: 'legal',
+            clause_text: 'The contractor agrees to indemnify the Government against all claims arising from intellectual property infringement related to the delivered solution.',
+            confidence_score: 78, risk_flag: 'high', status: 'complete',
+            generated_answer: 'Aeonark Labs provides standard IP indemnification for all proprietary components of our solution. We warrant that our software does not infringe upon any third-party patents, copyrights, or trade secrets. Our indemnification covers legal defense costs and damages up to the total contract value. Open-source components are documented with compatible licenses (MIT, Apache 2.0).',
+            reasoning_summary: 'Good confidence but flagged high risk — IP indemnification scope should be reviewed by legal. Standard language used from prior contracts.',
+        },
+        {
+            id: 'c8', clause_index: 8, clause_type: 'operational',
+            clause_text: 'Provide a detailed transition plan for knowledge transfer at contract conclusion, ensuring zero disruption to ongoing operations.',
+            confidence_score: 65, risk_flag: 'medium', status: 'pending',
+            generated_answer: null,
+            reasoning_summary: null,
+        },
+    ],
+    'demo-rfp-2': [
+        {
+            id: 'c9', clause_index: 1, clause_type: 'technical',
+            clause_text: 'The system must support HL7 FHIR R4 interoperability standards for all patient data exchange with existing EHR systems.',
+            confidence_score: 85, risk_flag: 'low', status: 'complete',
+            generated_answer: 'Our platform is HL7 FHIR R4 certified and supports all standard resource types including Patient, Encounter, Observation, and DiagnosticReport. We maintain active integrations with Epic, Cerner, and Meditech via SMART on FHIR. Our FHIR server processes 10,000+ API calls per minute with sub-100ms latency.',
+            reasoning_summary: 'Strong match from healthcare capability documentation. FHIR certification is current.',
+        },
+        {
+            id: 'c10', clause_index: 2, clause_type: 'compliance',
+            clause_text: 'All systems handling Protected Health Information (PHI) must comply with HIPAA Security Rule requirements including encryption, access controls, and audit trails.',
+            confidence_score: 96, risk_flag: 'low', status: 'complete',
+            generated_answer: 'Aeonark Labs is HIPAA-compliant with annual SOC 2 Type II attestation. PHI is encrypted at rest (AES-256) and in transit (TLS 1.3). Role-based access control enforces minimum necessary access. Comprehensive audit trails capture all PHI access with 7-year retention. We execute BAAs with all covered entities.',
+            reasoning_summary: 'Very high confidence — direct compliance documentation match with 5 prior healthcare proposals.',
+        },
+    ],
+}
 
 // ============================================
 // Types
@@ -204,6 +291,14 @@ export default function ClausesPage() {
     // -----------------------------------
     useEffect(() => {
         async function loadRFPs() {
+            // Demo mode — use built-in sample data
+            if (isSupabasePlaceholder()) {
+                setRFPs(DEMO_RFPS)
+                setSelectedRFP(DEMO_RFPS[0].id)
+                setLoading(false)
+                return
+            }
+
             try {
                 const { data, error: fetchError } = await supabase
                     .from('rfp_documents')
@@ -239,6 +334,13 @@ export default function ClausesPage() {
     const fetchClauses = useCallback(async (rfpId: string) => {
         setLoading(true)
         setError(null)
+
+        // Demo mode
+        if (isSupabasePlaceholder()) {
+            setClauses(DEMO_CLAUSES[rfpId] || [])
+            setLoading(false)
+            return
+        }
 
         try {
             const { data, error: fetchError } = await supabase
