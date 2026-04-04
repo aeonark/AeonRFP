@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
     Upload,
@@ -15,6 +15,8 @@ import {
     Search,
     FileCheck,
 } from 'lucide-react'
+import { addRFP, addClauses, updateRFP } from '@/lib/store/local-store'
+import type { StoredClause } from '@/lib/store/local-store'
 
 type FileStatus =
     | 'idle'
@@ -34,6 +36,8 @@ interface UploadedFile {
     progress: number
     error?: string
     clausesFound?: number
+    rfpId?: string
+    file: File // Keep reference to the actual File object
 }
 
 const ALLOWED_TYPES = [
@@ -52,10 +56,10 @@ function formatFileSize(bytes: number): string {
 const STATUS_LABELS: Record<FileStatus, string> = {
     idle: 'Ready',
     validating: 'Validating document…',
-    uploading: 'Uploading to secure storage…',
+    uploading: 'Sending to processing server…',
     extracting: 'AI extracting text from document…',
-    splitting: 'Splitting into clauses…',
-    embedding: 'Generating embeddings & analyzing…',
+    splitting: 'Splitting into clauses & classifying…',
+    embedding: 'Analyzing clause types & risk levels…',
     complete: 'Processing complete!',
     error: 'Failed',
 }
@@ -65,6 +69,7 @@ export default function UploadPage() {
     const [files, setFiles] = useState<UploadedFile[]>([])
     const [dragOver, setDragOver] = useState(false)
     const [allDone, setAllDone] = useState(false)
+    const fileInputRef = useRef<File[]>([]) // Store actual File objects
 
     function validateFile(file: File): string | null {
         if (!ALLOWED_TYPES.includes(file.type))
@@ -76,7 +81,9 @@ export default function UploadPage() {
     const handleFiles = useCallback(
         (fileList: FileList | null) => {
             if (!fileList) return
-            const newFiles: UploadedFile[] = Array.from(fileList).map((file) => {
+            const rawFiles = Array.from(fileList)
+
+            const newFiles: UploadedFile[] = rawFiles.map((file) => {
                 const error = validateFile(file)
                 return {
                     name: file.name,
@@ -85,19 +92,24 @@ export default function UploadPage() {
                     status: error ? 'error' : 'idle',
                     progress: 0,
                     error: error || undefined,
+                    file,
                 }
             })
-            setFiles((prev) => [...prev, ...newFiles])
-            setAllDone(false)
 
-            // Start processing valid files
-            newFiles.forEach((f, i) => {
-                if (f.status === 'error') return
-                const idx = files.length + i
-                processFile(idx)
+            setFiles((prev) => {
+                const updated = [...prev, ...newFiles]
+                // Start processing valid files
+                newFiles.forEach((f, i) => {
+                    if (f.status === 'error') return
+                    const idx = prev.length + i
+                    processFile(idx, f.file)
+                })
+                return updated
             })
+            setAllDone(false)
         },
-        [files.length]
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        []
     )
 
     function updateFile(index: number, updates: Partial<UploadedFile>) {
@@ -106,34 +118,92 @@ export default function UploadPage() {
         )
     }
 
-    async function processFile(fileIndex: number) {
-        const stages: {
-            status: FileStatus
-            progress: number
-            duration: number
-        }[] = [
-                { status: 'validating', progress: 10, duration: 600 },
-                { status: 'uploading', progress: 30, duration: 1200 },
-                { status: 'extracting', progress: 55, duration: 2000 },
-                { status: 'splitting', progress: 75, duration: 1500 },
-                { status: 'embedding', progress: 90, duration: 2000 },
-            ]
+    async function processFile(fileIndex: number, file: File) {
+        // Stage 1: Validating
+        updateFile(fileIndex, { status: 'validating', progress: 10 })
+        await new Promise((r) => setTimeout(r, 300))
 
-        for (const stage of stages) {
-            updateFile(fileIndex, {
-                status: stage.status,
-                progress: stage.progress,
+        // Stage 2: Upload to server for processing
+        updateFile(fileIndex, { status: 'uploading', progress: 20 })
+
+        try {
+            const formData = new FormData()
+            formData.append('file', file)
+
+            // Stage 3: Extracting — Call the real processing API
+            updateFile(fileIndex, { status: 'extracting', progress: 40 })
+
+            const response = await fetch('/api/process-local', {
+                method: 'POST',
+                body: formData,
             })
-            await new Promise((r) => setTimeout(r, stage.duration))
-        }
 
-        // Simulate clause count (randomized for realism)
-        const clausesFound = 4 + Math.floor(Math.random() * 8) // 4–11 clauses
-        updateFile(fileIndex, {
-            status: 'complete',
-            progress: 100,
-            clausesFound,
-        })
+            if (!response.ok) {
+                const errorBody = await response.json().catch(() => ({ error: 'Processing failed' }))
+                throw new Error(errorBody.error || `Server error: ${response.status}`)
+            }
+
+            const result = await response.json()
+
+            // Stage 4: Splitting & classifying
+            updateFile(fileIndex, { status: 'splitting', progress: 65 })
+            await new Promise((r) => setTimeout(r, 400))
+
+            // Stage 5: Storing results
+            updateFile(fileIndex, { status: 'embedding', progress: 80 })
+
+            // Create the RFP record in local store
+            const rfp = addRFP({
+                title: file.name.replace(/\.[^.]+$/, ''),
+                status: 'completed',
+                clause_count: result.clauses.length,
+                file_name: file.name,
+                file_size: file.size,
+            })
+
+            // Store clauses in local store
+            const clauseRecords: Omit<StoredClause, 'id' | 'created_at'>[] = result.clauses.map(
+                (clause: {
+                    clause_index: number
+                    clause_text: string
+                    clause_type: string
+                    confidence_score: number
+                    risk_flag: string
+                    status: string
+                    generated_answer: string | null
+                    reasoning_summary: string | null
+                }) => ({
+                    rfp_id: rfp.id,
+                    clause_index: clause.clause_index,
+                    clause_text: clause.clause_text,
+                    clause_type: clause.clause_type,
+                    confidence_score: clause.confidence_score,
+                    risk_flag: clause.risk_flag,
+                    status: clause.status,
+                    generated_answer: clause.generated_answer,
+                    reasoning_summary: clause.reasoning_summary,
+                })
+            )
+
+            addClauses(clauseRecords)
+
+            await new Promise((r) => setTimeout(r, 300))
+
+            // Stage 6: Complete
+            updateFile(fileIndex, {
+                status: 'complete',
+                progress: 100,
+                clausesFound: result.clauses.length,
+                rfpId: rfp.id,
+            })
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Processing failed'
+            updateFile(fileIndex, {
+                status: 'error',
+                progress: 0,
+                error: message,
+            })
+        }
 
         // Check if all files are done
         setFiles((prev) => {
@@ -359,18 +429,18 @@ export default function UploadPage() {
                         </div>
                         <div className="rounded-xl bg-secondary/50 p-3 text-center">
                             <div className="text-lg font-bold text-aeon-violet">
-                                {Math.floor(totalClauses * 0.7)}
+                                {completedFiles.length}
                             </div>
                             <div className="text-xs text-muted-foreground">
-                                Matches Ready
+                                Documents Processed
                             </div>
                         </div>
                         <div className="rounded-xl bg-secondary/50 p-3 text-center">
                             <div className="text-lg font-bold text-aeon-emerald">
-                                {Math.round(75 + Math.random() * 15)}%
+                                Real Data
                             </div>
                             <div className="text-xs text-muted-foreground">
-                                Avg Confidence
+                                Analysis Type
                             </div>
                         </div>
                     </div>
