@@ -10,7 +10,7 @@ import {
     Target,
     Users,
     Loader2,
-    AlertCircle,
+    Inbox,
     Timer,
 } from 'lucide-react'
 import {
@@ -25,7 +25,7 @@ import {
     ResponsiveContainer,
     Cell,
 } from 'recharts'
-import { createClient } from '@/lib/supabase/client'
+import { getRFPs, getAllClauses, invalidateCache } from '@/lib/store/local-store'
 
 // ============================================
 // Types
@@ -74,151 +74,131 @@ export default function AnalyticsPage() {
     const [winRateData, setWinRateData] = useState<WinRateDataPoint[]>([])
     const [clauseTypeData, setClauseTypeData] = useState<ClauseTypeDataPoint[]>([])
     const [loading, setLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
-
-    const supabase = createClient()
+    const [isEmpty, setIsEmpty] = useState(false)
 
     useEffect(() => {
-        fetchAnalytics()
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        computeAnalytics()
     }, [])
 
-    async function fetchAnalytics() {
+    function computeAnalytics() {
         setLoading(true)
-        setError(null)
+        invalidateCache()
 
-        try {
-            // -----------------------------------
-            // 1. Total RFPs
-            // -----------------------------------
-            const { count: totalRFPs, error: rfpErr } = await supabase
-                .from('rfp_documents')
-                .select('*', { count: 'exact', head: true })
+        const rfps = getRFPs()
+        const allClauses = getAllClauses()
 
-            if (rfpErr) throw rfpErr
-
-            // -----------------------------------
-            // 2. Clause-level metrics
-            // -----------------------------------
-            const { data: clauseData, error: clauseErr } = await supabase
-                .from('clauses')
-                .select('id, clause_type, confidence_score, generated_answer, created_at, status')
-
-            if (clauseErr) throw clauseErr
-
-            const clauses = clauseData || []
-            const totalClauses = clauses.length
-
-            // Average Confidence Score
-            const clausesWithConfidence = clauses.filter((c) => c.confidence_score != null && c.confidence_score > 0)
-            const avgConfidence = clausesWithConfidence.length > 0
-                ? Math.round(clausesWithConfidence.reduce((sum, c) => sum + (c.confidence_score || 0), 0) / clausesWithConfidence.length)
-                : 0
-
-            // Answered clauses (have generated_answer)
-            const answeredClauses = clauses.filter((c) => c.generated_answer != null).length
-
-            // Clause Reuse Rate — ratio of answered clauses to total
-            const clauseReuseRate = totalClauses > 0
-                ? Math.round((answeredClauses / totalClauses) * 100)
-                : 0
-
-            // Win Rate — clauses with confidence > 75 as "predicted wins"
-            const highConfidenceClauses = clausesWithConfidence.filter((c) => (c.confidence_score || 0) > 75)
-            const winRate = clausesWithConfidence.length > 0
-                ? Math.round((highConfidenceClauses.length / clausesWithConfidence.length) * 100)
-                : 0
-
-            // Average Response Time — estimate from clause creation timestamps
-            // (time between first and last clause in each RFP as proxy)
-            const { data: rfpTimingData } = await supabase
-                .from('rfp_documents')
-                .select('created_at, status')
-                .eq('status', 'completed')
-
-            let avgResponseTime = 0
-            if (rfpTimingData && rfpTimingData.length > 0) {
-                // Use hours since creation as a proxy
-                const now = Date.now()
-                const totalHours = rfpTimingData.reduce((sum, rfp) => {
-                    const created = new Date(rfp.created_at).getTime()
-                    return sum + (now - created) / (1000 * 60 * 60)
-                }, 0)
-                avgResponseTime = parseFloat((totalHours / rfpTimingData.length).toFixed(1))
-            }
-
-            // Top performer — clause type with highest avg confidence
-            const typeConfidences: Record<string, { sum: number; count: number }> = {}
-            for (const c of clausesWithConfidence) {
-                const type = c.clause_type || 'general'
-                if (!typeConfidences[type]) typeConfidences[type] = { sum: 0, count: 0 }
-                typeConfidences[type].sum += c.confidence_score || 0
-                typeConfidences[type].count++
-            }
-            const topPerformer = Object.entries(typeConfidences)
-                .map(([type, data]) => ({ type, avg: data.sum / data.count }))
-                .sort((a, b) => b.avg - a.avg)[0]?.type || 'N/A'
-
-            setMetrics({
-                totalRFPs: totalRFPs || 0,
-                avgConfidence,
-                avgResponseTime,
-                clauseReuseRate,
-                winRate,
-                totalClauses,
-                answeredClauses,
-                topPerformer: topPerformer.charAt(0).toUpperCase() + topPerformer.slice(1),
-            })
-
-            // -----------------------------------
-            // 3. Win Rate Over Time (AreaChart)
-            // -----------------------------------
-            // Group clauses by month, compute win rate per month
-            const monthlyData: Record<string, { wins: number; total: number }> = {}
-            for (const c of clausesWithConfidence) {
-                const date = new Date(c.created_at)
-                const monthKey = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
-                if (!monthlyData[monthKey]) monthlyData[monthKey] = { wins: 0, total: 0 }
-                monthlyData[monthKey].total++
-                if ((c.confidence_score || 0) > 75) monthlyData[monthKey].wins++
-            }
-
-            const winRateTimeSeries = Object.entries(monthlyData)
-                .map(([month, data]) => ({
-                    month,
-                    rate: Math.round((data.wins / data.total) * 100),
-                }))
-                .slice(-7) // last 7 months
-
-            setWinRateData(winRateTimeSeries)
-
-            // -----------------------------------
-            // 4. Clause Types Distribution (BarChart)
-            // -----------------------------------
-            const typeCounts: Record<string, number> = {}
-            for (const c of clauses) {
-                const type = c.clause_type || 'general'
-                typeCounts[type] = (typeCounts[type] || 0) + 1
-            }
-
-            const typeDistribution = Object.entries(typeCounts)
-                .map(([type, count]) => ({
-                    type: type.charAt(0).toUpperCase() + type.slice(1),
-                    count,
-                }))
-                .sort((a, b) => b.count - a.count)
-
-            setClauseTypeData(typeDistribution)
-        } catch (err) {
-            console.error('[analytics] Failed to load metrics:', err)
-            setError('Failed to load analytics data')
-        } finally {
+        if (rfps.length === 0 && allClauses.length === 0) {
+            setIsEmpty(true)
             setLoading(false)
+            return
         }
+
+        setIsEmpty(false)
+
+        const totalRFPs = rfps.length
+        const totalClauses = allClauses.length
+
+        // Average Confidence Score
+        const clausesWithConfidence = allClauses.filter(
+            (c) => c.confidence_score != null && c.confidence_score > 0
+        )
+        const avgConfidence = clausesWithConfidence.length > 0
+            ? Math.round(
+                clausesWithConfidence.reduce((sum, c) => sum + (c.confidence_score || 0), 0) /
+                clausesWithConfidence.length
+            )
+            : 0
+
+        // Answered clauses (have generated_answer)
+        const answeredClauses = allClauses.filter((c) => c.generated_answer != null).length
+
+        // Clause Reuse Rate — ratio of answered clauses to total
+        const clauseReuseRate = totalClauses > 0
+            ? Math.round((answeredClauses / totalClauses) * 100)
+            : 0
+
+        // Win Rate — clauses with confidence > 75 as "predicted wins"
+        const highConfidenceClauses = clausesWithConfidence.filter(
+            (c) => (c.confidence_score || 0) > 75
+        )
+        const winRate = clausesWithConfidence.length > 0
+            ? Math.round((highConfidenceClauses.length / clausesWithConfidence.length) * 100)
+            : 0
+
+        // Avg Response Time — compute from RFP creation dates
+        const completedRFPs = rfps.filter((r) => r.status === 'completed')
+        let avgResponseTime = 0
+        if (completedRFPs.length > 0) {
+            const now = Date.now()
+            const totalHours = completedRFPs.reduce((sum, rfp) => {
+                const created = new Date(rfp.created_at).getTime()
+                return sum + (now - created) / (1000 * 60 * 60)
+            }, 0)
+            avgResponseTime = parseFloat((totalHours / completedRFPs.length).toFixed(1))
+        }
+
+        // Top performer — clause type with highest avg confidence
+        const typeConfidences: Record<string, { sum: number; count: number }> = {}
+        for (const c of clausesWithConfidence) {
+            const type = c.clause_type || 'general'
+            if (!typeConfidences[type]) typeConfidences[type] = { sum: 0, count: 0 }
+            typeConfidences[type].sum += c.confidence_score || 0
+            typeConfidences[type].count++
+        }
+        const topPerformer = Object.entries(typeConfidences)
+            .map(([type, data]) => ({ type, avg: data.sum / data.count }))
+            .sort((a, b) => b.avg - a.avg)[0]?.type || 'N/A'
+
+        setMetrics({
+            totalRFPs,
+            avgConfidence,
+            avgResponseTime,
+            clauseReuseRate,
+            winRate,
+            totalClauses,
+            answeredClauses,
+            topPerformer: topPerformer.charAt(0).toUpperCase() + topPerformer.slice(1),
+        })
+
+        // Win Rate Over Time (AreaChart)
+        const monthlyData: Record<string, { wins: number; total: number }> = {}
+        for (const c of clausesWithConfidence) {
+            const date = new Date(c.created_at)
+            const monthKey = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+            if (!monthlyData[monthKey]) monthlyData[monthKey] = { wins: 0, total: 0 }
+            monthlyData[monthKey].total++
+            if ((c.confidence_score || 0) > 75) monthlyData[monthKey].wins++
+        }
+
+        const winRateTimeSeries = Object.entries(monthlyData)
+            .map(([month, data]) => ({
+                month,
+                rate: Math.round((data.wins / data.total) * 100),
+            }))
+            .slice(-7)
+
+        setWinRateData(winRateTimeSeries)
+
+        // Clause Types Distribution (BarChart)
+        const typeCounts: Record<string, number> = {}
+        for (const c of allClauses) {
+            const type = c.clause_type || 'general'
+            typeCounts[type] = (typeCounts[type] || 0) + 1
+        }
+
+        const typeDistribution = Object.entries(typeCounts)
+            .map(([type, count]) => ({
+                type: type.charAt(0).toUpperCase() + type.slice(1),
+                count,
+            }))
+            .sort((a, b) => b.count - a.count)
+
+        setClauseTypeData(typeDistribution)
+        setLoading(false)
     }
 
     // -----------------------------------
-    // Loading/Error states
+    // Loading state
     // -----------------------------------
     if (loading) {
         return (
@@ -231,18 +211,24 @@ export default function AnalyticsPage() {
         )
     }
 
-    if (error || !metrics) {
+    // -----------------------------------
+    // Empty state
+    // -----------------------------------
+    if (isEmpty || !metrics) {
         return (
             <div className="max-w-6xl mx-auto flex items-center justify-center py-32 animate-fade-in">
                 <div className="text-center">
-                    <AlertCircle className="w-8 h-8 text-destructive mx-auto mb-4" />
-                    <p className="text-sm text-destructive mb-2">{error || 'Failed to load analytics'}</p>
-                    <button
-                        onClick={fetchAnalytics}
-                        className="px-4 py-2 rounded-lg bg-secondary text-xs font-medium hover:bg-accent transition-colors"
+                    <Inbox className="w-10 h-10 text-muted-foreground mx-auto mb-4" />
+                    <p className="text-sm font-medium mb-1">No Analytics Data Yet</p>
+                    <p className="text-xs text-muted-foreground mb-4">
+                        Upload and process RFP documents to see analytics here.
+                    </p>
+                    <a
+                        href="/dashboard/upload"
+                        className="px-4 py-2 rounded-lg bg-gradient-to-r from-aeon-blue to-aeon-violet text-white text-xs font-medium hover:shadow-lg transition-all"
                     >
-                        Try Again
-                    </button>
+                        Upload an RFP
+                    </a>
                 </div>
             </div>
         )
@@ -267,7 +253,7 @@ export default function AnalyticsPage() {
                     </p>
                 </div>
                 <button
-                    onClick={fetchAnalytics}
+                    onClick={computeAnalytics}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-secondary text-xs font-medium hover:bg-accent transition-colors"
                 >
                     <Repeat className="w-3.5 h-3.5" />
@@ -368,7 +354,7 @@ export default function AnalyticsPage() {
                         </ResponsiveContainer>
                     ) : (
                         <div className="h-[220px] flex items-center justify-center text-xs text-muted-foreground">
-                            No data available yet. Process some RFPs to see trends.
+                            Process more RFPs to see trend data.
                         </div>
                     )}
                 </div>

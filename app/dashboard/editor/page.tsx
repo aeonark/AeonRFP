@@ -20,31 +20,12 @@ import {
     RefreshCw,
     Download,
 } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { getRFPs, getClauses, updateClause, invalidateCache } from '@/lib/store/local-store'
+import type { StoredRFP, StoredClause } from '@/lib/store/local-store'
 
 // ============================================
 // Types
 // ============================================
-
-interface ClauseSection {
-    id: string
-    clause_index: number
-    clause_text: string
-    clause_type: string
-    status: 'pending' | 'generating' | 'complete' | 'error'
-    generated_answer: string | null
-    confidence_score: number | null
-    risk_flag: string | null
-    reasoning_summary: string | null
-}
-
-interface RFPDocument {
-    id: string
-    title: string
-    status: string
-    clause_count: number | null
-    created_at: string
-}
 
 interface SSEEvent {
     stage: string
@@ -88,8 +69,8 @@ function StageIcon({ icon, className }: { icon: string; className?: string }) {
 // ============================================
 
 export default function EditorPage() {
-    const [sections, setSections] = useState<ClauseSection[]>([])
-    const [rfps, setRFPs] = useState<RFPDocument[]>([])
+    const [sections, setSections] = useState<StoredClause[]>([])
+    const [rfps, setRFPs] = useState<StoredRFP[]>([])
     const [selectedRFP, setSelectedRFP] = useState<string | null>(null)
     const [activeId, setActiveId] = useState<string | null>(null)
     const [editContent, setEditContent] = useState<string>('')
@@ -104,62 +85,32 @@ export default function EditorPage() {
 
     const [exporting, setExporting] = useState(false)
 
-    const supabase = createClient()
-
     // -----------------------------------
-    // Load available RFPs
+    // Load available RFPs from local store
     // -----------------------------------
     useEffect(() => {
-        async function loadRFPs() {
-            try {
-                const { data, error: fetchErr } = await supabase
-                    .from('rfp_documents')
-                    .select('id, title, status, clause_count, created_at')
-                    .in('status', ['completed', 'processing'])
-                    .order('created_at', { ascending: false })
+        invalidateCache()
+        const rfpList = getRFPs()
+        setRFPs(rfpList)
 
-                if (fetchErr) throw fetchErr
-
-                const rfpList = (data || []) as RFPDocument[]
-                setRFPs(rfpList)
-
-                if (rfpList.length > 0) {
-                    const first = rfpList.find((r) => r.status === 'completed') || rfpList[0]
-                    setSelectedRFP(first.id)
-                }
-            } catch (err) {
-                console.error('[editor] Failed to load RFPs:', err)
-                setError('Failed to load RFP documents')
-            } finally {
-                setLoading(false)
-            }
+        if (rfpList.length > 0) {
+            const first = rfpList.find((r) => r.status === 'completed') || rfpList[0]
+            setSelectedRFP(first.id)
         }
 
-        loadRFPs()
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        setLoading(false)
     }, [])
 
     // -----------------------------------
     // Load clauses for selected RFP
     // -----------------------------------
-    const fetchClauses = useCallback(async (rfpId: string) => {
+    const fetchClauses = useCallback((rfpId: string) => {
         setLoading(true)
         setError(null)
+        invalidateCache()
 
         try {
-            const { data, error: fetchErr } = await supabase
-                .from('clauses')
-                .select('id, clause_index, clause_text, clause_type, generated_answer, confidence_score, risk_flag, reasoning_summary, status')
-                .eq('rfp_id', rfpId)
-                .order('clause_index', { ascending: true })
-
-            if (fetchErr) throw fetchErr
-
-            const clauseList = (data || []).map((c: Record<string, unknown>) => ({
-                ...c,
-                status: c.generated_answer ? 'complete' : 'pending',
-            })) as ClauseSection[]
-
+            const clauseList = getClauses(rfpId)
             setSections(clauseList)
 
             // Auto-select the first clause
@@ -225,7 +176,7 @@ export default function EditorPage() {
                 body: JSON.stringify({
                     clause_text: section.clause_text,
                     clause_id: section.id,
-                    tenant_id: 'default', // Will be resolved server-side via auth in production
+                    tenant_id: 'default',
                     company_name: 'Our Organization',
                 }),
                 signal: controller.signal,
@@ -276,12 +227,21 @@ export default function EditorPage() {
                                             status: 'complete' as const,
                                             generated_answer: result.answer,
                                             confidence_score: result.confidence_score,
-                                            risk_flag: result.risk_flag,
+                                            risk_flag: result.risk_flag as 'low' | 'medium' | 'high',
                                             reasoning_summary: result.reasoning_summary,
                                         }
                                         : s
                                 )
                             )
+
+                            // Persist to local store
+                            updateClause(sectionId, {
+                                generated_answer: result.answer,
+                                confidence_score: result.confidence_score,
+                                risk_flag: result.risk_flag as 'low' | 'medium' | 'high',
+                                reasoning_summary: result.reasoning_summary,
+                                status: 'complete',
+                            })
 
                             // Update editor content if this section is active
                             if (sectionId === activeId) {
@@ -326,9 +286,9 @@ export default function EditorPage() {
     }
 
     // -----------------------------------
-    // Save edited content to Supabase
+    // Save edited content to local store
     // -----------------------------------
-    async function handleSave() {
+    function handleSave() {
         if (!activeId) return
 
         const section = sections.find((s) => s.id === activeId)
@@ -337,19 +297,15 @@ export default function EditorPage() {
         // Update local state
         setSections((prev) =>
             prev.map((s) =>
-                s.id === activeId ? { ...s, generated_answer: editContent } : s
+                s.id === activeId ? { ...s, generated_answer: editContent, status: editContent ? 'complete' : 'pending' } : s
             )
         )
 
-        // Persist to database
-        try {
-            await supabase
-                .from('clauses')
-                .update({ generated_answer: editContent })
-                .eq('id', activeId)
-        } catch (err) {
-            console.error('[editor] Failed to save:', err)
-        }
+        // Persist to local store
+        updateClause(activeId, {
+            generated_answer: editContent || null,
+            status: editContent ? 'complete' : 'pending',
+        })
     }
 
     // -----------------------------------
@@ -359,6 +315,45 @@ export default function EditorPage() {
         const pending = sections.filter((s) => s.status === 'pending')
         for (const section of pending) {
             await generateSection(section.id)
+        }
+    }
+
+    // -----------------------------------
+    // Export as text file
+    // -----------------------------------
+    function exportProposal() {
+        setExporting(true)
+        try {
+            const selectedDoc = rfps.find((r) => r.id === selectedRFP)
+            const title = selectedDoc?.title || 'Proposal'
+
+            let content = `# ${title}\n\n`
+            content += `Generated by AeonRFP\n`
+            content += `Date: ${new Date().toLocaleDateString()}\n\n`
+            content += `---\n\n`
+
+            for (const section of sections) {
+                content += `## Clause ${section.clause_index} (${section.clause_type})\n\n`
+                content += `**Original:** ${section.clause_text}\n\n`
+                if (section.generated_answer) {
+                    content += `**Response:** ${section.generated_answer}\n\n`
+                } else {
+                    content += `**Response:** _Pending_\n\n`
+                }
+                content += `---\n\n`
+            }
+
+            const blob = new Blob([content], { type: 'text/markdown' })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `${title.replace(/[^a-zA-Z0-9]/g, '_')}_proposal.md`
+            document.body.appendChild(a)
+            a.click()
+            a.remove()
+            URL.revokeObjectURL(url)
+        } finally {
+            setExporting(false)
         }
     }
 
@@ -489,29 +484,7 @@ export default function EditorPage() {
                 {/* Export Proposal button */}
                 {selectedRFP && completedCount > 0 && (
                     <button
-                        onClick={async () => {
-                            setExporting(true)
-                            try {
-                                const resp = await fetch(`/api/export-proposal?rfp_id=${selectedRFP}`)
-                                if (!resp.ok) {
-                                    const errBody = await resp.json().catch(() => ({ error: 'Export failed' }))
-                                    throw new Error(errBody.error)
-                                }
-                                const blob = await resp.blob()
-                                const url = URL.createObjectURL(blob)
-                                const a = document.createElement('a')
-                                a.href = url
-                                a.download = resp.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'proposal.docx'
-                                document.body.appendChild(a)
-                                a.click()
-                                a.remove()
-                                URL.revokeObjectURL(url)
-                            } catch (err) {
-                                console.error('[editor] Export failed:', err)
-                            } finally {
-                                setExporting(false)
-                            }
-                        }}
+                        onClick={exportProposal}
                         disabled={exporting}
                         className="w-full mt-2 px-4 py-2.5 rounded-xl bg-secondary text-sm font-medium hover:bg-accent transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                     >
