@@ -2,14 +2,16 @@
  * Document Parser — Real Text Extraction
  * Supports PDF, DOCX, and XLSX file formats.
  *
- * PDF  → pdf-parse
+ * PDF  → pdfjs-dist (legacy build, Node-compatible)
  * DOCX → mammoth
  * XLSX → xlsx (SheetJS)
  */
 
-import { PDFParse } from 'pdf-parse'
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
+
+// pdf-parse doesn't export a compatible ES default export in some Next.js configs
+const pdfParse = require('pdf-parse')
 
 // ============================================
 // Types
@@ -76,25 +78,16 @@ export async function extractTextFromBuffer(
 }
 
 /**
- * PDF extraction via pdf-parse v2 (PDFParse class).
+ * PDF extraction via pdf-parse.
+ * Designed specifically for Node.js server environments.
  */
 async function extractFromPDF(buffer: Buffer): Promise<ParseResult> {
-    const parser = new PDFParse({ data: new Uint8Array(buffer) })
+    const data = await pdfParse(buffer)
 
-    try {
-        const textResult = await parser.getText()
-        const info = await parser.getInfo()
-
-        return {
-            text: textResult.text || '',
-            pageCount: info.total,
-            metadata: {
-                title: info.info?.Title,
-                author: info.info?.Author,
-            },
-        }
-    } finally {
-        await parser.destroy()
+    return {
+        text: data.text,
+        pageCount: data.numpages,
+        metadata: data.info,
     }
 }
 
