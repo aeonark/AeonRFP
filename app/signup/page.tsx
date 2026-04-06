@@ -1,5 +1,7 @@
 'use client'
 
+import { createClient } from '@/lib/supabase/client'
+
 import Link from 'next/link'
 import { useState } from 'react'
 import { Sparkles, Eye, EyeOff, ArrowRight } from 'lucide-react'
@@ -13,6 +15,7 @@ export default function SignupPage() {
         email: '',
         password: '',
     })
+    const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
     function update(field: string, value: string) {
         setForm((prev) => ({ ...prev, [field]: value }))
@@ -21,9 +24,44 @@ export default function SignupPage() {
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault()
         setLoading(true)
-        // TODO: Integrate Supabase Auth + create tenant
-        await new Promise((r) => setTimeout(r, 1500))
-        window.location.href = '/dashboard'
+        setErrorMsg(null)
+        try {
+            const supabase = createClient()
+            
+            // 1. Sign up with Supabase Auth
+            const { data: authData, error: authError } = await supabase.auth.signUp({
+                email: form.email,
+                password: form.password,
+            })
+
+            if (authError) throw new Error(authError.message)
+            
+            if (authData.user) {
+                // 2. Create Tenant manually (since no RLS is enforcing blocks on this table)
+                const { data: tenantData, error: tenantError } = await supabase.from('tenants').insert({
+                    company_name: form.company,
+                    plan_type: 'starter'
+                }).select().single()
+
+                if (tenantError) throw new Error(`Tenant setup failed: ${tenantError.message}`)
+
+                // 3. Create User record
+                const { error: userError } = await supabase.from('users').insert({
+                    id: authData.user.id,
+                    email: form.email,
+                    full_name: form.name,
+                    tenant_id: tenantData.id,
+                    role: 'admin'
+                })
+
+                if (userError) throw new Error(`User setup failed: ${userError.message}`)
+            }
+
+            window.location.href = '/dashboard'
+        } catch (err: any) {
+            setErrorMsg(err.message)
+            setLoading(false)
+        }
     }
 
     return (
@@ -94,6 +132,12 @@ export default function SignupPage() {
                                 className="w-full h-11 px-4 rounded-lg bg-input border border-border text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-aeon-blue/50 transition-all"
                             />
                         </div>
+
+                        {errorMsg && (
+                            <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
+                                {errorMsg}
+                            </div>
+                        )}
 
                         {/* Password */}
                         <div>

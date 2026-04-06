@@ -1,5 +1,7 @@
 'use client'
 
+import { createClient } from '@/lib/supabase/client'
+
 import Link from 'next/link'
 import { useState } from 'react'
 import { Sparkles, Eye, EyeOff, ArrowRight } from 'lucide-react'
@@ -9,13 +11,24 @@ export default function LoginPage() {
     const [loading, setLoading] = useState(false)
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
+    const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault()
         setLoading(true)
-        // TODO: Integrate Supabase Auth
-        await new Promise((r) => setTimeout(r, 1500))
-        window.location.href = '/dashboard'
+        setErrorMsg(null)
+        try {
+            const supabase = createClient()
+            const { error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            })
+            if (error) throw new Error(error.message)
+            window.location.href = '/dashboard'
+        } catch (err: any) {
+            setErrorMsg(err.message)
+            setLoading(false)
+        }
     }
 
     return (
@@ -68,6 +81,12 @@ export default function LoginPage() {
                                 className="w-full h-11 px-4 rounded-lg bg-input border border-border text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-aeon-blue/50 transition-all"
                             />
                         </div>
+
+                        {errorMsg && (
+                            <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
+                                {errorMsg}
+                            </div>
+                        )}
 
                         {/* Password */}
                         <div>
