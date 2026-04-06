@@ -14,8 +14,9 @@ import {
     ArrowUpRight,
     Inbox,
 } from 'lucide-react'
-import { getRFPs, getAllClauses, invalidateCache } from '@/lib/store/local-store'
-import type { StoredRFP } from '@/lib/store/local-store'
+import { createClient } from '@/lib/supabase/client'
+
+type StoredRFP = any
 
 const quickActions = [
     { label: 'Upload RFP', href: '/dashboard/upload', icon: Upload, desc: 'Drag & drop a new document' },
@@ -58,25 +59,33 @@ export default function DashboardOverview() {
     })
 
     useEffect(() => {
-        invalidateCache()
-        const rfpList = getRFPs()
-        const allClauses = getAllClauses()
+        async function loadData() {
+            const supabase = createClient()
+            const [rfpsRes, clausesRes] = await Promise.all([
+                supabase.from('rfp_documents').select('*').order('created_at', { ascending: false }),
+                supabase.from('clauses').select('*')
+            ])
 
-        setRFPs(rfpList)
+            const rfpList = rfpsRes.data || []
+            const allClauses = clausesRes.data || []
 
-        const clausesWithConfidence = allClauses.filter(
-            (c) => c.confidence_score != null && c.confidence_score > 0
-        )
-        const avgConf = clausesWithConfidence.length > 0
-            ? Math.round(clausesWithConfidence.reduce((s, c) => s + (c.confidence_score || 0), 0) / clausesWithConfidence.length)
-            : 0
+            setRFPs(rfpList)
 
-        setStats({
-            totalRFPs: rfpList.length,
-            totalClauses: allClauses.length,
-            avgConfidence: avgConf,
-            answeredClauses: allClauses.filter((c) => c.generated_answer != null).length,
-        })
+            const clausesWithConfidence = allClauses.filter(
+                (c: any) => c.confidence_score != null && c.confidence_score > 0
+            )
+            const avgConf = clausesWithConfidence.length > 0
+                ? Math.round(clausesWithConfidence.reduce((s: any, c: any) => s + (c.confidence_score || 0), 0) / clausesWithConfidence.length)
+                : 0
+
+            setStats({
+                totalRFPs: rfpList.length,
+                totalClauses: allClauses.length,
+                avgConfidence: avgConf,
+                answeredClauses: allClauses.filter((c: any) => c.generated_answer != null).length,
+            })
+        }
+        loadData()
     }, [])
 
     const statCards = [
@@ -166,7 +175,7 @@ export default function DashboardOverview() {
                                         key={rfp.id}
                                         className="border-b border-border/30 last:border-0 hover:bg-secondary/30 transition-colors"
                                     >
-                                        <td className="px-5 py-4 text-sm font-medium">{rfp.title}</td>
+                                        <td className="px-5 py-4 text-sm font-medium">{rfp.name}</td>
                                         <td className="px-5 py-4">{statusBadge(rfp.status)}</td>
                                         <td className="px-5 py-4 text-sm text-muted-foreground">{rfp.clause_count ?? '—'}</td>
                                         <td className="px-5 py-4 text-sm text-muted-foreground">{timeAgo(rfp.created_at)}</td>

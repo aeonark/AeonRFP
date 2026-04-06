@@ -25,7 +25,7 @@ import {
     ResponsiveContainer,
     Cell,
 } from 'recharts'
-import { getRFPs, getAllClauses, invalidateCache } from '@/lib/store/local-store'
+import { createClient } from '@/lib/supabase/client'
 
 // ============================================
 // Types
@@ -80,12 +80,17 @@ export default function AnalyticsPage() {
         computeAnalytics()
     }, [])
 
-    function computeAnalytics() {
+    async function computeAnalytics() {
         setLoading(true)
-        invalidateCache()
 
-        const rfps = getRFPs()
-        const allClauses = getAllClauses()
+        const supabase = createClient()
+        const [rfpsRes, clausesRes] = await Promise.all([
+            supabase.from('rfp_documents').select('*'),
+            supabase.from('clauses').select('*')
+        ])
+
+        const rfps = rfpsRes.data || []
+        const allClauses = clausesRes.data || []
 
         if (rfps.length === 0 && allClauses.length === 0) {
             setIsEmpty(true)
