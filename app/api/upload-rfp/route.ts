@@ -6,7 +6,14 @@ export async function POST(request: NextRequest) {
         const supabase = await createClient()
         const formData = await request.formData()
         const file = formData.get('file') as File | null
-        const tenantId = formData.get('tenant_id') as string | null
+
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
+        const { data: userData } = await supabase.from('users').select('tenant_id').eq('id', user.id).single()
+        const tenantId = userData?.tenant_id
 
         if (!file || !tenantId) {
             return NextResponse.json(

@@ -15,8 +15,7 @@ import {
     Search,
     FileCheck,
 } from 'lucide-react'
-import { addRFP, addClauses, updateRFP } from '@/lib/store/local-store'
-import type { StoredClause } from '@/lib/store/local-store'
+import { createClient } from '@/lib/supabase/client'
 
 type FileStatus =
     | 'idle'
@@ -133,68 +132,32 @@ export default function UploadPage() {
             // Stage 3: Extracting — Call the real processing API
             updateFile(fileIndex, { status: 'extracting', progress: 40 })
 
-            const response = await fetch('/api/process-local', {
+            const response = await fetch('/api/upload-rfp', {
                 method: 'POST',
                 body: formData,
             })
 
             if (!response.ok) {
-                const errorBody = await response.json().catch(() => ({ error: 'Processing failed' }))
+                const errorBody = await response.json().catch(() => ({ error: 'Upload failed' }))
                 throw new Error(errorBody.error || `Server error: ${response.status}`)
             }
 
             const result = await response.json()
 
-            // Stage 4: Splitting & classifying
+            // Stage 4: Processing (handled by backend async, we simulate progress for UX)
             updateFile(fileIndex, { status: 'splitting', progress: 65 })
-            await new Promise((r) => setTimeout(r, 400))
+            await new Promise((r) => setTimeout(r, 1000))
 
-            // Stage 5: Storing results
+            // Stage 5: Done (Real implementation would poll status or use Supabase realtime)
             updateFile(fileIndex, { status: 'embedding', progress: 80 })
-
-            // Create the RFP record in local store
-            const rfp = addRFP({
-                title: file.name.replace(/\.[^.]+$/, ''),
-                status: 'completed',
-                clause_count: result.clauses.length,
-                file_name: file.name,
-                file_size: file.size,
-            })
-
-            // Store clauses in local store
-            const clauseRecords: Omit<StoredClause, 'id' | 'created_at'>[] = result.clauses.map(
-                (clause: {
-                    clause_index: number
-                    clause_text: string
-                    clause_type: string
-                    confidence_score: number
-                    risk_flag: string
-                    status: string
-                    generated_answer: string | null
-                    reasoning_summary: string | null
-                }) => ({
-                    rfp_id: rfp.id,
-                    clause_index: clause.clause_index,
-                    clause_text: clause.clause_text,
-                    clause_type: clause.clause_type,
-                    confidence_score: clause.confidence_score,
-                    risk_flag: clause.risk_flag,
-                    status: clause.status,
-                    generated_answer: clause.generated_answer,
-                    reasoning_summary: clause.reasoning_summary,
-                })
-            )
-
-            addClauses(clauseRecords)
-
-            await new Promise((r) => setTimeout(r, 300))
+            await new Promise((r) => setTimeout(r, 1000))
 
             // Stage 6: Complete
             updateFile(fileIndex, {
                 status: 'complete',
                 progress: 100,
-                clausesFound: result.clauses.length,
-                rfpId: rfp.id,
+                clausesFound: result.clauses_extracted || 0,
+                rfpId: result.rfp_id,
             })
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Processing failed'
