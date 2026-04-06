@@ -20,8 +20,10 @@ import {
     RefreshCw,
     Download,
 } from 'lucide-react'
-import { getRFPs, getClauses, updateClause, invalidateCache } from '@/lib/store/local-store'
-import type { StoredRFP, StoredClause } from '@/lib/store/local-store'
+import { createClient } from '@/lib/supabase/client'
+
+type StoredClause = any
+type StoredRFP = any
 
 // ============================================
 // Types
@@ -89,32 +91,40 @@ export default function EditorPage() {
     // Load available RFPs from local store
     // -----------------------------------
     useEffect(() => {
-        invalidateCache()
-        const rfpList = getRFPs()
-        setRFPs(rfpList)
+        const loadDocs = async () => {
+            const supabase = createClient()
+            const { data: { user } } = await supabase.auth.getUser()
+            if (!user) return setLoading(false)
+            
+            const { data } = await supabase.from('rfp_documents').select('*').order('created_at', { ascending: false })
+            const rfpList = data || []
+            setRFPs(rfpList)
 
-        if (rfpList.length > 0) {
-            const first = rfpList.find((r) => r.status === 'completed') || rfpList[0]
-            setSelectedRFP(first.id)
+            if (rfpList.length > 0) {
+                const first = rfpList.find((r: any) => r.status === 'completed') || rfpList[0]
+                setSelectedRFP(first.id)
+            }
+
+            setLoading(false)
         }
-
-        setLoading(false)
+        loadDocs()
     }, [])
 
     // -----------------------------------
     // Load clauses for selected RFP
     // -----------------------------------
-    const fetchClauses = useCallback((rfpId: string) => {
+    const fetchClauses = useCallback(async (rfpId: string) => {
         setLoading(true)
         setError(null)
-        invalidateCache()
 
         try {
-            const clauseList = getClauses(rfpId)
+            const supabase = createClient()
+            const { data } = await supabase.from('clauses').select('*').eq('rfp_id', rfpId).order('clause_index', { ascending: true })
+            const clauseList = data || []
             setSections(clauseList)
 
             // Auto-select the first clause
-            if (clauseList.length > 0 && (!activeId || !clauseList.find((c) => c.id === activeId))) {
+            if (clauseList.length > 0 && (!activeId || !clauseList.find((c: any) => c.id === activeId))) {
                 setActiveId(clauseList[0].id)
                 setEditContent(clauseList[0].generated_answer || '')
             }
@@ -234,14 +244,15 @@ export default function EditorPage() {
                                 )
                             )
 
-                            // Persist to local store
-                            updateClause(sectionId, {
+                            // Persist to Supabase
+                            const supabase = createClient()
+                            supabase.from('clauses').update({
                                 generated_answer: result.answer,
                                 confidence_score: result.confidence_score,
-                                risk_flag: result.risk_flag as 'low' | 'medium' | 'high',
+                                risk_flag: result.risk_flag,
                                 reasoning_summary: result.reasoning_summary,
                                 status: 'complete',
-                            })
+                            }).eq('id', sectionId).then()
 
                             // Update editor content if this section is active
                             if (sectionId === activeId) {
@@ -288,24 +299,27 @@ export default function EditorPage() {
     // -----------------------------------
     // Save edited content to local store
     // -----------------------------------
-    function handleSave() {
+    async function handleSave() {
         if (!activeId) return
 
         const section = sections.find((s) => s.id === activeId)
         if (!section) return
 
+        const newStatus = editContent ? 'complete' : 'pending'
+
         // Update local state
         setSections((prev) =>
             prev.map((s) =>
-                s.id === activeId ? { ...s, generated_answer: editContent, status: editContent ? 'complete' : 'pending' } : s
+                s.id === activeId ? { ...s, generated_answer: editContent, status: newStatus } : s
             )
         )
 
-        // Persist to local store
-        updateClause(activeId, {
+        // Persist to DB
+        const supabase = createClient()
+        await supabase.from('clauses').update({
             generated_answer: editContent || null,
-            status: editContent ? 'complete' : 'pending',
-        })
+            status: newStatus,
+        }).eq('id', activeId)
     }
 
     // -----------------------------------
@@ -325,7 +339,7 @@ export default function EditorPage() {
         setExporting(true)
         try {
             const selectedDoc = rfps.find((r) => r.id === selectedRFP)
-            const title = selectedDoc?.title || 'Proposal'
+            const title = selectedDoc?.name || 'Proposal'
 
             let content = `# ${title}\n\n`
             content += `Generated by AeonRFP\n`
@@ -386,7 +400,7 @@ export default function EditorPage() {
                     >
                         {rfps.map((rfp) => (
                             <option key={rfp.id} value={rfp.id}>
-                                {rfp.title || `RFP #${rfp.id.slice(0, 8)}`}
+                                {rfp.name || `RFP #${rfp.id.slice(0, 8)}`}
                             </option>
                         ))}
                     </select>

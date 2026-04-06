@@ -15,8 +15,10 @@ import {
     RefreshCw,
     Inbox,
 } from 'lucide-react'
-import { getRFPs, getClauses, invalidateCache } from '@/lib/store/local-store'
-import type { StoredRFP, StoredClause } from '@/lib/store/local-store'
+import { createClient } from '@/lib/supabase/client'
+
+type StoredClause = any
+type StoredRFP = any
 
 // ============================================
 // Sub-components
@@ -174,31 +176,38 @@ export default function ClausesPage() {
     const [loading, setLoading] = useState(true)
 
     // -----------------------------------
-    // Fetch available RFPs from local store
+    // Fetch available RFPs from Supabase
     // -----------------------------------
     useEffect(() => {
-        invalidateCache()
-        const rfpList = getRFPs()
-        setRFPs(rfpList)
+        const loadDocs = async () => {
+            const supabase = createClient()
+            const { data: { user } } = await supabase.auth.getUser()
+            if (!user) return setLoading(false)
+            
+            const { data } = await supabase.from('rfp_documents').select('*').order('created_at', { ascending: false })
+            const rfpList = data || []
+            setRFPs(rfpList)
 
-        // Auto-select the first RFP
-        if (rfpList.length > 0 && !selectedRFP) {
-            const firstCompleted = rfpList.find((r) => r.status === 'completed')
-            setSelectedRFP(firstCompleted?.id || rfpList[0].id)
+            // Auto-select the first RFP
+            if (rfpList.length > 0 && !selectedRFP) {
+                const firstCompleted = rfpList.find((r: any) => r.status === 'completed')
+                setSelectedRFP(firstCompleted?.id || rfpList[0].id)
+            }
+
+            setLoading(false)
         }
-
-        setLoading(false)
+        loadDocs()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
     // -----------------------------------
     // Fetch clauses for selected RFP
     // -----------------------------------
-    const fetchClauses = useCallback((rfpId: string) => {
+    const fetchClauses = useCallback(async (rfpId: string) => {
         setLoading(true)
-        invalidateCache()
-        const clauseList = getClauses(rfpId)
-        setClauses(clauseList)
+        const supabase = createClient()
+        const { data } = await supabase.from('clauses').select('*').eq('rfp_id', rfpId).order('clause_index', { ascending: true })
+        setClauses(data || [])
         setLoading(false)
     }, [])
 
@@ -258,7 +267,7 @@ export default function ClausesPage() {
                     >
                         {rfps.map((rfp) => (
                             <option key={rfp.id} value={rfp.id}>
-                                {rfp.title || `RFP #${rfp.id.slice(0, 8)}`}
+                                {rfp.name || `RFP #${rfp.id.slice(0, 8)}`}
                                 {rfp.clause_count ? ` (${rfp.clause_count} clauses)` : ''}
                                 {rfp.status === 'processing' ? ' — Processing' : ''}
                             </option>
@@ -318,7 +327,7 @@ export default function ClausesPage() {
                 <div className="glass-card rounded-2xl p-16 text-center">
                     <Loader2 className="w-8 h-8 text-aeon-blue animate-spin mx-auto mb-4" />
                     <p className="text-sm text-muted-foreground">
-                        Loading clauses{selectedRFPDoc ? ` for "${selectedRFPDoc.title || 'RFP'}"` : ''}...
+                        Loading clauses{selectedRFPDoc ? ` for "${selectedRFPDoc.name || 'RFP'}"` : ''}...
                     </p>
                 </div>
             )}
