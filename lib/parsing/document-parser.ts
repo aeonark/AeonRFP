@@ -10,7 +10,14 @@
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
 
-// Excluded from Webpack in next.config.mjs to prevent module corruption
+// 1. Mock out visual layout APIs that don't exist in Serverless Node.js
+if (typeof globalThis.DOMMatrix === 'undefined') {
+    globalThis.DOMMatrix = class DOMMatrix {} as any;
+}
+if (typeof globalThis.Path2D === 'undefined') {
+    globalThis.Path2D = class Path2D {} as any;
+}
+// 2. Excluded from Webpack in next.config.mjs to prevent module corruption
 const pdfParse = require('pdf-parse')
 
 // ============================================
