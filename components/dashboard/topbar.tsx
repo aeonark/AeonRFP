@@ -1,8 +1,18 @@
 'use client'
 
-import { Bell, Search, User } from 'lucide-react'
+import { Bell, Search, User, LogOut } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
+import { useRouter } from 'next/navigation'
 
 export function Topbar() {
+    const router = useRouter()
+
+    async function handleLogout() {
+        const supabase = createClient()
+        await supabase.auth.signOut()
+        router.push('/login')
+    }
+
     return (
         <header className="h-16 border-b border-border bg-card/50 backdrop-blur-sm flex items-center justify-between px-6 sticky top-0 z-20">
             {/* Search */}
@@ -19,6 +29,15 @@ export function Topbar() {
 
             {/* Right side */}
             <div className="flex items-center gap-4">
+                {/* Logout */}
+                <button 
+                    onClick={handleLogout}
+                    title="Log Out"
+                    className="p-2 mr-2 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                >
+                    <LogOut className="w-5 h-5" />
+                </button>
+
                 {/* Notifications */}
                 <button className="relative p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                     <Bell className="w-[18px] h-[18px]" />
