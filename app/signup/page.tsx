@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase/client'
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { Sparkles, Eye, EyeOff, ArrowRight } from 'lucide-react'
+import { Sparkles, Eye, EyeOff, ArrowRight, Chrome } from 'lucide-react'
 
 export default function SignupPage() {
     const [showPassword, setShowPassword] = useState(false)
@@ -19,6 +19,17 @@ export default function SignupPage() {
 
     function update(field: string, value: string) {
         setForm((prev) => ({ ...prev, [field]: value }))
+    }
+
+    async function handleGoogleSignup() {
+        setLoading(true)
+        const supabase = createClient()
+        await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+                redirectTo: `${window.location.origin}/auth/callback`
+            }
+        })
     }
 
     async function handleSubmit(e: React.FormEvent) {
@@ -65,7 +76,7 @@ export default function SignupPage() {
     }
 
     return (
-        <div className="min-h-screen bg-background relative flex items-center justify-center px-4">
+        <div className="min-h-screen bg-background relative flex items-center justify-center px-4 py-12">
             <div className="fixed inset-0 mesh-gradient pointer-events-none" />
             <div className="absolute w-[500px] h-[500px] bg-aeon-violet/6 rounded-full blur-[100px] bottom-1/4 right-1/4 animate-pulse-glow" />
 
@@ -85,6 +96,27 @@ export default function SignupPage() {
                         <p className="text-sm text-muted-foreground">
                             Start your free trial — no credit card required
                         </p>
+                    </div>
+
+                    <div className="space-y-4 mb-6">
+                        <button
+                            type="button"
+                            onClick={handleGoogleSignup}
+                            disabled={loading}
+                            className="w-full h-11 flex items-center justify-center gap-3 rounded-lg bg-input border border-border text-foreground hover:bg-muted transition-all font-medium text-sm"
+                        >
+                            <Chrome className="w-4 h-4" />
+                            Sign up with Google
+                        </button>
+                    </div>
+
+                    <div className="relative mb-6">
+                        <div className="absolute inset-0 flex items-center">
+                            <span className="w-full border-t border-border" />
+                        </div>
+                        <div className="relative flex justify-center text-xs uppercase">
+                            <span className="bg-background px-2 text-muted-foreground">Or continue with email</span>
+                        </div>
                     </div>
 
                     <form onSubmit={handleSubmit} className="space-y-5">

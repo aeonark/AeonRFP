@@ -138,8 +138,13 @@ export default function UploadPage() {
             })
 
             if (!response.ok) {
-                const errorBody = await response.json().catch(() => ({ error: 'Upload failed' }))
-                throw new Error(errorBody.error || `Server error: ${response.status}`)
+                const rawText = await response.text()
+                let finalMsg = `HTTP ${response.status} FATAL CRASH: ${rawText}`
+                try {
+                    const parsed = JSON.parse(rawText)
+                    if (parsed.error) finalMsg = parsed.error
+                } catch(e) {}
+                throw new Error(finalMsg)
             }
 
             const result = await response.json()
@@ -248,7 +253,10 @@ export default function UploadPage() {
                             className="hidden"
                             accept=".pdf,.docx,.xlsx"
                             multiple
-                            onChange={(e) => handleFiles(e.target.files)}
+                            onChange={(e) => {
+                                handleFiles(e.target.files)
+                                e.target.value = ''
+                            }}
                         />
                     </label>
                 </div>

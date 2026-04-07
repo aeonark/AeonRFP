@@ -20,6 +20,15 @@ import {
 } from '@/lib/parsing/document-parser'
 import { normalizeClause } from '@/lib/smartmatch/normalize'
 import { generateEmbedding } from '@/lib/smartmatch/embedding'
+import * as fs from 'fs'
+import * as path from 'path'
+
+function logDebug(message: string, data?: any) {
+    const logPath = path.join(process.cwd(), 'pipeline.log')
+    const timestamp = new Date().toISOString()
+    const text = `[${timestamp}] [PROCESS-RFP] ${message} ${data ? JSON.stringify(data) : ''}\n`
+    try { fs.appendFileSync(logPath, text) } catch (e) {}
+}
 
 // ============================================
 // Types
@@ -27,6 +36,7 @@ import { generateEmbedding } from '@/lib/smartmatch/embedding'
 
 interface ProcessRequest {
     rfp_id: string
+    tenant_id: string
 }
 
 // ============================================
@@ -35,22 +45,24 @@ interface ProcessRequest {
 
 export async function POST(request: NextRequest) {
     const startTime = Date.now()
+    logDebug('1. Background Process Triggered')
 
     try {
         // -----------------------------------
         // 1. Parse and validate request
         // -----------------------------------
         const body = (await request.json()) as ProcessRequest
-        const { rfp_id } = body
+        const { rfp_id, tenant_id } = body
+        logDebug('2. Parsed Request', { rfp_id, tenant_id })
 
-        if (!rfp_id) {
+        if (!rfp_id || !tenant_id) {
             return NextResponse.json(
-                { error: 'Missing required field: rfp_id' },
+                { error: 'Missing required field: rfp_id or tenant_id' },
                 { status: 400 }
             )
         }
 
-        console.log(`[process-rfp] Starting processing for RFP: ${rfp_id}`)
+        console.log(`[process-rfp] Starting processing for RFP: ${rfp_id}, Tenant: ${tenant_id}`)
 
         const supabase = await createClient()
 
@@ -102,7 +114,7 @@ export async function POST(request: NextRequest) {
                 // Supabase Storage path
                 const { data: fileData, error: downloadError } = await supabase
                     .storage
-                    .from('rfp-uploads')
+                    .from('rfp-documents')
                     .download(fileUrl)
 
                 if (downloadError || !fileData) {
@@ -190,10 +202,10 @@ export async function POST(request: NextRequest) {
         // -----------------------------------
         const clauseRecords = rawClauses.map((clause) => ({
             rfp_id,
+            tenant_id,
             clause_text: normalizeClause(clause.text),
             clause_index: clause.index,
-            clause_type: 'general' as const,
-            status: 'pending' as const,
+            clause_type: 'general' as const
         }))
 
         const { error: insertError } = await supabase

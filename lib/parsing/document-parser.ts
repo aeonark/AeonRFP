@@ -10,7 +10,7 @@
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
 
-// pdf-parse doesn't export a compatible ES default export in some Next.js configs
+// Excluded from Webpack in next.config.mjs to prevent module corruption
 const pdfParse = require('pdf-parse')
 
 // ============================================

@@ -1,19 +1,22 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
-
 import Link from 'next/link'
 import { useState } from 'react'
-import { Sparkles, Eye, EyeOff, ArrowRight } from 'lucide-react'
+import { Sparkles, Eye, EyeOff, ArrowRight, Mail, Chrome } from 'lucide-react'
+
+type AuthMode = 'password' | 'otp' | 'verify_otp'
 
 export default function LoginPage() {
+    const [authMode, setAuthMode] = useState<AuthMode>('password')
     const [showPassword, setShowPassword] = useState(false)
     const [loading, setLoading] = useState(false)
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
+    const [token, setToken] = useState('')
     const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-    async function handleSubmit(e: React.FormEvent) {
+    async function handlePasswordLogin(e: React.FormEvent) {
         e.preventDefault()
         setLoading(true)
         setErrorMsg(null)
@@ -29,6 +32,57 @@ export default function LoginPage() {
             setErrorMsg(err.message)
             setLoading(false)
         }
+    }
+
+    async function handleSendOtp(e: React.FormEvent) {
+        e.preventDefault()
+        setLoading(true)
+        setErrorMsg(null)
+        try {
+            const supabase = createClient()
+            const { error } = await supabase.auth.signInWithOtp({
+                email,
+                options: {
+                    shouldCreateUser: true
+                }
+            })
+            if (error) throw new Error(error.message)
+            setAuthMode('verify_otp')
+            setLoading(false)
+        } catch (err: any) {
+            setErrorMsg(err.message)
+            setLoading(false)
+        }
+    }
+
+    async function handleVerifyOtp(e: React.FormEvent) {
+        e.preventDefault()
+        setLoading(true)
+        setErrorMsg(null)
+        try {
+            const supabase = createClient()
+            const { error } = await supabase.auth.verifyOtp({
+                email,
+                token,
+                type: 'email'
+            })
+            if (error) throw new Error(error.message)
+            window.location.href = '/dashboard'
+        } catch (err: any) {
+            setErrorMsg(err.message)
+            setLoading(false)
+        }
+    }
+
+    async function handleGoogleLogin() {
+        setLoading(true)
+        const supabase = createClient()
+        await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+                redirectTo: `${window.location.origin}/auth/callback`
+            }
+        })
     }
 
     return (
@@ -55,91 +109,156 @@ export default function LoginPage() {
                         </p>
                     </div>
 
-                    <form onSubmit={handleSubmit} className="space-y-5">
-                        {/* Organization (multi-tenant placeholder) */}
-                        <div>
-                            <label className="block text-sm font-medium text-foreground mb-1.5">
-                                Organization
-                            </label>
-                            <select className="w-full h-11 px-4 rounded-lg bg-input border border-border text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-aeon-blue/50 transition-all">
-                                <option>Aeonark Labs</option>
-                                <option>Other Organization...</option>
-                            </select>
-                        </div>
-
-                        {/* Email */}
-                        <div>
-                            <label className="block text-sm font-medium text-foreground mb-1.5">
-                                Email
-                            </label>
-                            <input
-                                type="email"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                placeholder="you@company.com"
-                                required
-                                className="w-full h-11 px-4 rounded-lg bg-input border border-border text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-aeon-blue/50 transition-all"
-                            />
-                        </div>
-
-                        {errorMsg && (
-                            <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
-                                {errorMsg}
-                            </div>
-                        )}
-
-                        {/* Password */}
-                        <div>
-                            <div className="flex items-center justify-between mb-1.5">
-                                <label className="text-sm font-medium text-foreground">
-                                    Password
-                                </label>
-                                <button
-                                    type="button"
-                                    className="text-xs text-aeon-blue hover:underline"
-                                >
-                                    Forgot password?
-                                </button>
-                            </div>
-                            <div className="relative">
-                                <input
-                                    type={showPassword ? 'text' : 'password'}
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    placeholder="••••••••"
-                                    required
-                                    className="w-full h-11 px-4 pr-11 rounded-lg bg-input border border-border text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-aeon-blue/50 transition-all"
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setShowPassword(!showPassword)}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                                >
-                                    {showPassword ? (
-                                        <EyeOff className="w-4 h-4" />
-                                    ) : (
-                                        <Eye className="w-4 h-4" />
-                                    )}
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Submit */}
+                    <div className="space-y-4 mb-6">
                         <button
-                            type="submit"
+                            type="button"
+                            onClick={handleGoogleLogin}
                             disabled={loading}
-                            className="w-full h-11 rounded-lg bg-gradient-to-r from-aeon-blue to-aeon-violet text-white font-semibold text-sm hover:shadow-lg hover:shadow-aeon-blue/20 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            className="w-full h-11 flex items-center justify-center gap-3 rounded-lg bg-input border border-border text-foreground hover:bg-muted transition-all font-medium text-sm"
                         >
-                            {loading ? (
-                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            ) : (
-                                <>
-                                    Sign In
-                                    <ArrowRight className="w-4 h-4" />
-                                </>
-                            )}
+                            <Chrome className="w-4 h-4" />
+                            Continue with Google
                         </button>
-                    </form>
+                    </div>
+
+                    <div className="relative mb-6">
+                        <div className="absolute inset-0 flex items-center">
+                            <span className="w-full border-t border-border" />
+                        </div>
+                        <div className="relative flex justify-center text-xs uppercase">
+                            <span className="bg-background px-2 text-muted-foreground">Or continue with email</span>
+                        </div>
+                    </div>
+
+                    {authMode === 'verify_otp' ? (
+                        <form onSubmit={handleVerifyOtp} className="space-y-5">
+                            <div>
+                                <label className="block text-sm font-medium text-foreground mb-1.5 text-center">
+                                    Enter the 6-digit code sent to {email}
+                                </label>
+                                <input
+                                    type="text"
+                                    value={token}
+                                    onChange={(e) => setToken(e.target.value)}
+                                    placeholder="000000"
+                                    required
+                                    className="w-full h-14 text-center tracking-widest text-2xl font-bold rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-aeon-blue/50 transition-all"
+                                />
+                            </div>
+
+                            {errorMsg && (
+                                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium text-center">
+                                    {errorMsg}
+                                </div>
+                            )}
+
+                            <button
+                                type="submit"
+                                disabled={loading}
+                                className="w-full h-11 rounded-lg bg-gradient-to-r from-aeon-blue to-aeon-violet text-white font-semibold text-sm hover:shadow-lg hover:shadow-aeon-blue/20 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            >
+                                {loading ? (
+                                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                ) : (
+                                    <>Verify Code <ArrowRight className="w-4 h-4" /></>
+                                )}
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => setAuthMode('otp')}
+                                className="w-full text-sm text-muted-foreground hover:text-foreground text-center"
+                            >
+                                Did not receive a code? Try again
+                            </button>
+                        </form>
+                    ) : (
+                        <form onSubmit={authMode === 'password' ? handlePasswordLogin : handleSendOtp} className="space-y-5">
+                            {/* Email */}
+                            <div>
+                                <label className="block text-sm font-medium text-foreground mb-1.5">
+                                    Email
+                                </label>
+                                <input
+                                    type="email"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    placeholder="you@company.com"
+                                    required
+                                    className="w-full h-11 px-4 rounded-lg bg-input border border-border text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-aeon-blue/50 transition-all"
+                                />
+                            </div>
+
+                            {errorMsg && (
+                                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
+                                    {errorMsg}
+                                </div>
+                            )}
+
+                            {/* Password - only show in password mode */}
+                            {authMode === 'password' && (
+                                <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <label className="text-sm font-medium text-foreground">
+                                            Password
+                                        </label>
+                                        <button
+                                            type="button"
+                                            className="text-xs text-aeon-blue hover:underline"
+                                        >
+                                            Forgot password?
+                                        </button>
+                                    </div>
+                                    <div className="relative">
+                                        <input
+                                            type={showPassword ? 'text' : 'password'}
+                                            value={password}
+                                            onChange={(e) => setPassword(e.target.value)}
+                                            placeholder="••••••••"
+                                            required
+                                            className="w-full h-11 px-4 pr-11 rounded-lg bg-input border border-border text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-aeon-blue/50 transition-all"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPassword(!showPassword)}
+                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                        >
+                                            {showPassword ? (
+                                                <EyeOff className="w-4 h-4" />
+                                            ) : (
+                                                <Eye className="w-4 h-4" />
+                                            )}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Submit */}
+                            <button
+                                type="submit"
+                                disabled={loading}
+                                className="w-full h-11 rounded-lg bg-gradient-to-r from-aeon-blue to-aeon-violet text-white font-semibold text-sm hover:shadow-lg hover:shadow-aeon-blue/20 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            >
+                                {loading ? (
+                                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                ) : (
+                                    <>
+                                        {authMode === 'password' ? 'Sign In' : 'Send Code'}
+                                        <ArrowRight className="w-4 h-4" />
+                                    </>
+                                )}
+                            </button>
+
+                            {/* Toggle Auth Mode */}
+                            <button
+                                type="button"
+                                onClick={() => setAuthMode(authMode === 'password' ? 'otp' : 'password')}
+                                className="w-full text-sm text-aeon-blue hover:underline text-center"
+                            >
+                                {authMode === 'password' ? 'Sign in with One-Time Password' : 'Sign in with Password instead'}
+                            </button>
+                        </form>
+                    )}
 
                     <div className="mt-6 text-center text-sm text-muted-foreground">
                         Don&apos;t have an account?{' '}

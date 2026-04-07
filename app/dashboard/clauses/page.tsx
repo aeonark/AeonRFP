@@ -183,7 +183,7 @@ export default function ClausesPage() {
             const supabase = createClient()
             const { data: { user } } = await supabase.auth.getUser()
             if (!user) return setLoading(false)
-            
+
             const { data } = await supabase.from('rfp_documents').select('*').order('created_at', { ascending: false })
             const rfpList = data || []
             setRFPs(rfpList)
