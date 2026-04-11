@@ -19,6 +19,7 @@ import {
     TrendingUp,
     RefreshCw,
     Download,
+    Check,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 
@@ -40,6 +41,8 @@ interface SSEEvent {
     }
     error?: string
 }
+
+type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 // ============================================
 // SSE Stage Labels
@@ -78,6 +81,12 @@ export default function EditorPage() {
     const [editContent, setEditContent] = useState<string>('')
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [tenantId, setTenantId] = useState<string>('default')
+    const [companyName, setCompanyName] = useState<string>('Our Organization')
+
+    // Save state
+    const [saveState, setSaveState] = useState<SaveState>('idle')
+    const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
     // SSE streaming state
     const [generatingId, setGeneratingId] = useState<string | null>(null)
@@ -86,17 +95,36 @@ export default function EditorPage() {
     const abortRef = useRef<AbortController | null>(null)
 
     const [exporting, setExporting] = useState(false)
+    const [copied, setCopied] = useState(false)
 
     // -----------------------------------
-    // Load available RFPs from local store
+    // Load user + RFPs
     // -----------------------------------
     useEffect(() => {
         const loadDocs = async () => {
             const supabase = createClient()
             const { data: { user } } = await supabase.auth.getUser()
             if (!user) return setLoading(false)
-            
-            const { data } = await supabase.from('rfp_documents').select('*').order('created_at', { ascending: false })
+
+            // Get tenant info for the current user
+            const { data: userData } = await supabase
+                .from('users')
+                .select('tenant_id, tenants(name)')
+                .eq('id', user.id)
+                .single()
+
+            if (userData?.tenant_id) {
+                setTenantId(userData.tenant_id)
+            }
+            if ((userData?.tenants as any)?.name) {
+                setCompanyName((userData.tenants as any).name)
+            }
+
+            const { data } = await supabase
+                .from('rfp_documents')
+                .select('*')
+                .order('created_at', { ascending: false })
+
             const rfpList = data || []
             setRFPs(rfpList)
 
@@ -119,11 +147,15 @@ export default function EditorPage() {
 
         try {
             const supabase = createClient()
-            const { data } = await supabase.from('clauses').select('*').eq('rfp_id', rfpId).order('clause_index', { ascending: true })
+            const { data } = await supabase
+                .from('clauses')
+                .select('*')
+                .eq('rfp_id', rfpId)
+                .order('clause_index', { ascending: true })
+
             const clauseList = data || []
             setSections(clauseList)
 
-            // Auto-select the first clause
             if (clauseList.length > 0 && (!activeId || !clauseList.find((c: any) => c.id === activeId))) {
                 setActiveId(clauseList[0].id)
                 setEditContent(clauseList[0].generated_answer || '')
@@ -139,9 +171,7 @@ export default function EditorPage() {
     }, [activeId])
 
     useEffect(() => {
-        if (selectedRFP) {
-            fetchClauses(selectedRFP)
-        }
+        if (selectedRFP) fetchClauses(selectedRFP)
     }, [selectedRFP, fetchClauses])
 
     // -----------------------------------
@@ -149,34 +179,67 @@ export default function EditorPage() {
     // -----------------------------------
     function selectSection(id: string) {
         setActiveId(id)
+        setSaveState('idle')
         const section = sections.find((s) => s.id === id)
         setEditContent(section?.generated_answer || '')
     }
 
     // -----------------------------------
-    // Generate section via SSE streaming
+    // Save section via server API (bypasses RLS)
+    // -----------------------------------
+    async function handleSave() {
+        if (!activeId || saveState === 'saving') return
+
+        setSaveState('saving')
+
+        // Optimistic local update
+        setSections((prev) =>
+            prev.map((s) =>
+                s.id === activeId ? { ...s, generated_answer: editContent } : s
+            )
+        )
+
+        try {
+            const res = await fetch('/api/save-clause', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ clause_id: activeId, generated_answer: editContent }),
+            })
+
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}))
+                throw new Error(body.error || `HTTP ${res.status}`)
+            }
+
+            setSaveState('saved')
+            if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+            saveTimerRef.current = setTimeout(() => setSaveState('idle'), 2500)
+        } catch (err) {
+            console.error('[editor] Save failed:', err)
+            setSaveState('error')
+            if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+            saveTimerRef.current = setTimeout(() => setSaveState('idle'), 3000)
+        }
+    }
+
+    // -----------------------------------
+    // Generate section via SSE
     // -----------------------------------
     async function generateSection(sectionId: string) {
         const section = sections.find((s) => s.id === sectionId)
         if (!section) return
 
-        // Abort any previous generation
-        if (abortRef.current) {
-            abortRef.current.abort()
-        }
+        if (abortRef.current) abortRef.current.abort()
 
         const controller = new AbortController()
         abortRef.current = controller
 
-        // Update UI: status → generating
         setGeneratingId(sectionId)
         setCurrentStage('normalizing')
         setCurrentProgress(0)
 
         setSections((prev) =>
-            prev.map((s) =>
-                s.id === sectionId ? { ...s, status: 'generating' as const } : s
-            )
+            prev.map((s) => s.id === sectionId ? { ...s, status: 'generating' as const } : s)
         )
 
         try {
@@ -186,8 +249,8 @@ export default function EditorPage() {
                 body: JSON.stringify({
                     clause_text: section.clause_text,
                     clause_id: section.id,
-                    tenant_id: 'default',
-                    company_name: 'Our Organization',
+                    tenant_id: tenantId,
+                    company_name: companyName,
                 }),
                 signal: controller.signal,
             })
@@ -197,7 +260,6 @@ export default function EditorPage() {
                 throw new Error(errorBody.error || `HTTP ${response.status}`)
             }
 
-            // Read SSE stream
             const reader = response.body?.getReader()
             if (!reader) throw new Error('No response body')
 
@@ -209,10 +271,8 @@ export default function EditorPage() {
                 if (done) break
 
                 buffer += decoder.decode(value, { stream: true })
-
-                // Parse SSE events (format: "data: {...}\n\n")
                 const lines = buffer.split('\n\n')
-                buffer = lines.pop() || '' // Keep incomplete data in buffer
+                buffer = lines.pop() || ''
 
                 for (const line of lines) {
                     const dataLine = line.trim()
@@ -220,12 +280,9 @@ export default function EditorPage() {
 
                     try {
                         const event: SSEEvent = JSON.parse(dataLine.slice(6))
-
-                        // Update progress UI
                         setCurrentStage(event.stage)
                         setCurrentProgress(event.progress || 0)
 
-                        // Handle completion
                         if (event.stage === 'complete' && event.result) {
                             const result = event.result
 
@@ -234,7 +291,6 @@ export default function EditorPage() {
                                     s.id === sectionId
                                         ? {
                                             ...s,
-                                            status: 'complete' as const,
                                             generated_answer: result.answer,
                                             confidence_score: result.confidence_score,
                                             risk_flag: result.risk_flag as 'low' | 'medium' | 'high',
@@ -244,26 +300,15 @@ export default function EditorPage() {
                                 )
                             )
 
-                            // Persist to Supabase
-                            const supabase = createClient()
-                            supabase.from('clauses').update({
-                                generated_answer: result.answer,
-                                confidence_score: result.confidence_score,
-                                risk_flag: result.risk_flag,
-                                reasoning_summary: result.reasoning_summary,
-                                status: 'complete',
-                            }).eq('id', sectionId).then()
-
-                            // Update editor content if this section is active
                             if (sectionId === activeId) {
                                 setEditContent(result.answer)
+                                setSaveState('saved')
+                                if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+                                saveTimerRef.current = setTimeout(() => setSaveState('idle'), 2500)
                             }
                         }
 
-                        // Handle errors
-                        if (event.stage === 'error') {
-                            throw new Error(event.error || 'Generation failed')
-                        }
+                        if (event.stage === 'error') throw new Error(event.error || 'Generation failed')
                     } catch (parseErr) {
                         if (parseErr instanceof SyntaxError) {
                             console.warn('[editor] Skipping malformed SSE event')
@@ -274,19 +319,11 @@ export default function EditorPage() {
                 }
             }
         } catch (err) {
-            if ((err as Error).name === 'AbortError') {
-                console.log('[editor] Generation aborted')
-                return
-            }
+            if ((err as Error).name === 'AbortError') return
 
             console.error('[editor] Generation failed:', err)
-
             setSections((prev) =>
-                prev.map((s) =>
-                    s.id === sectionId
-                        ? { ...s, status: 'error' as const }
-                        : s
-                )
+                prev.map((s) => s.id === sectionId ? { ...s, status: 'error' as const } : s)
             )
         } finally {
             setGeneratingId(null)
@@ -297,43 +334,26 @@ export default function EditorPage() {
     }
 
     // -----------------------------------
-    // Save edited content to local store
-    // -----------------------------------
-    async function handleSave() {
-        if (!activeId) return
-
-        const section = sections.find((s) => s.id === activeId)
-        if (!section) return
-
-        const newStatus = editContent ? 'complete' : 'pending'
-
-        // Update local state
-        setSections((prev) =>
-            prev.map((s) =>
-                s.id === activeId ? { ...s, generated_answer: editContent, status: newStatus } : s
-            )
-        )
-
-        // Persist to DB
-        const supabase = createClient()
-        await supabase.from('clauses').update({
-            generated_answer: editContent || null,
-            status: newStatus,
-        }).eq('id', activeId)
-    }
-
-    // -----------------------------------
-    // Generate all pending sections
+    // Generate all pending (no answer) sections
     // -----------------------------------
     async function generateAllPending() {
-        const pending = sections.filter((s) => s.status === 'pending')
+        const pending = sections.filter((s) => !s.generated_answer)
         for (const section of pending) {
             await generateSection(section.id)
         }
     }
 
     // -----------------------------------
-    // Export as text file
+    // Copy to clipboard
+    // -----------------------------------
+    async function handleCopy() {
+        await navigator.clipboard.writeText(editContent)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+    }
+
+    // -----------------------------------
+    // Export as markdown
     // -----------------------------------
     function exportProposal() {
         setExporting(true)
@@ -343,17 +363,14 @@ export default function EditorPage() {
 
             let content = `# ${title}\n\n`
             content += `Generated by AeonRFP\n`
-            content += `Date: ${new Date().toLocaleDateString()}\n\n`
-            content += `---\n\n`
+            content += `Date: ${new Date().toLocaleDateString()}\n\n---\n\n`
 
             for (const section of sections) {
                 content += `## Clause ${section.clause_index} (${section.clause_type})\n\n`
                 content += `**Original:** ${section.clause_text}\n\n`
-                if (section.generated_answer) {
-                    content += `**Response:** ${section.generated_answer}\n\n`
-                } else {
-                    content += `**Response:** _Pending_\n\n`
-                }
+                content += section.generated_answer
+                    ? `**Response:** ${section.generated_answer}\n\n`
+                    : `**Response:** _Pending_\n\n`
                 content += `---\n\n`
             }
 
@@ -375,9 +392,52 @@ export default function EditorPage() {
     // Derived state
     // -----------------------------------
     const activeSection = sections.find((s) => s.id === activeId)
-    const completedCount = sections.filter((s) => s.status === 'complete').length
-    const pendingCount = sections.filter((s) => s.status === 'pending').length
+    const completedCount = sections.filter((s) => !!s.generated_answer).length
+    const pendingCount = sections.filter((s) => !s.generated_answer && s.id !== generatingId).length
     const stageInfo = STAGE_LABELS[currentStage]
+
+    // -----------------------------------
+    // Save button label
+    // -----------------------------------
+    const SaveButton = () => {
+        if (saveState === 'saving') {
+            return (
+                <button disabled className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-secondary text-muted-foreground text-xs font-semibold opacity-70">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Saving…
+                </button>
+            )
+        }
+        if (saveState === 'saved') {
+            return (
+                <button disabled className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-aeon-emerald/10 text-aeon-emerald text-xs font-semibold">
+                    <Check className="w-3.5 h-3.5" />
+                    Saved!
+                </button>
+            )
+        }
+        if (saveState === 'error') {
+            return (
+                <button
+                    onClick={handleSave}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-destructive/10 text-destructive text-xs font-semibold hover:bg-destructive/20 transition-colors"
+                >
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    Retry Save
+                </button>
+            )
+        }
+        return (
+            <button
+                onClick={handleSave}
+                disabled={activeSection?.id === generatingId}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-aeon-emerald text-white text-xs font-semibold hover:bg-aeon-emerald/90 transition-colors disabled:opacity-50"
+            >
+                <Send className="w-3.5 h-3.5" />
+                Save Section
+            </button>
+        )
+    }
 
     // -----------------------------------
     // Render
@@ -427,60 +487,65 @@ export default function EditorPage() {
 
                 {/* Section list */}
                 <div className="flex-1 space-y-1.5 overflow-y-auto pr-1">
-                    {sections.map((section) => (
-                        <button
-                            key={section.id}
-                            onClick={() => selectSection(section.id)}
-                            className={`w-full text-left p-3 rounded-xl transition-all duration-200 ${activeId === section.id
-                                ? 'glass-card border-aeon-blue/30'
-                                : 'hover:bg-secondary/50'
-                                }`}
-                        >
-                            <div className="flex items-center gap-2">
-                                {section.status === 'complete' && (
-                                    <CheckCircle2 className="w-4 h-4 text-aeon-emerald shrink-0" />
-                                )}
-                                {section.status === 'generating' && (
-                                    <Loader2 className="w-4 h-4 text-aeon-blue animate-spin shrink-0" />
-                                )}
-                                {section.status === 'pending' && (
-                                    <div className="w-4 h-4 rounded-full border-2 border-border shrink-0" />
-                                )}
-                                {section.status === 'error' && (
-                                    <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
-                                )}
-                                <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-medium truncate">
-                                        Clause {section.clause_index}
+                            {sections.map((section) => {
+                                const isGenerating = section.id === generatingId
+                                const isDone = !!section.generated_answer
+                                const hasError = section._error === true
+                                return (
+                                <button
+                                    key={section.id}
+                                    onClick={() => selectSection(section.id)}
+                                    className={`w-full text-left p-3 rounded-xl transition-all duration-200 ${activeId === section.id
+                                        ? 'glass-card border-aeon-blue/30'
+                                        : 'hover:bg-secondary/50'
+                                        }`}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        {isDone && !isGenerating && (
+                                            <CheckCircle2 className="w-4 h-4 text-aeon-emerald shrink-0" />
+                                        )}
+                                        {isGenerating && (
+                                            <Loader2 className="w-4 h-4 text-aeon-blue animate-spin shrink-0" />
+                                        )}
+                                        {!isDone && !isGenerating && !hasError && (
+                                            <div className="w-4 h-4 rounded-full border-2 border-border shrink-0" />
+                                        )}
+                                        {hasError && (
+                                            <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
+                                        )}
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-sm font-medium truncate">
+                                                Clause {section.clause_index}
+                                            </div>
+                                            <div className="text-[10px] text-muted-foreground truncate mt-0.5">
+                                                {section.clause_text?.slice(0, 60)}…
+                                            </div>
+                                        </div>
+                                        {activeId === section.id && (
+                                            <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+                                        )}
                                     </div>
-                                    <div className="text-[10px] text-muted-foreground truncate mt-0.5">
-                                        {section.clause_text.slice(0, 60)}…
-                                    </div>
-                                </div>
-                                {activeId === section.id && (
-                                    <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
-                                )}
-                            </div>
 
-                            {/* SSE Progress bar for generating section */}
-                            {section.id === generatingId && (
-                                <div className="mt-2">
-                                    <div className="h-1 rounded-full bg-secondary overflow-hidden">
-                                        <div
-                                            className="h-full rounded-full bg-gradient-to-r from-aeon-blue to-aeon-violet transition-all duration-500"
-                                            style={{ width: `${currentProgress}%` }}
-                                        />
-                                    </div>
-                                    {stageInfo && (
-                                        <div className="flex items-center gap-1.5 mt-1">
-                                            <StageIcon icon={stageInfo.icon} className="w-3 h-3 text-aeon-blue animate-pulse" />
-                                            <span className="text-[10px] text-aeon-blue">{stageInfo.label}</span>
+                                    {/* SSE Progress bar */}
+                                    {section.id === generatingId && (
+                                        <div className="mt-2">
+                                            <div className="h-1 rounded-full bg-secondary overflow-hidden">
+                                                <div
+                                                    className="h-full rounded-full bg-gradient-to-r from-aeon-blue to-aeon-violet transition-all duration-500"
+                                                    style={{ width: `${currentProgress}%` }}
+                                                />
+                                            </div>
+                                            {stageInfo && (
+                                                <div className="flex items-center gap-1.5 mt-1">
+                                                    <StageIcon icon={stageInfo.icon} className="w-3 h-3 text-aeon-blue animate-pulse" />
+                                                    <span className="text-[10px] text-aeon-blue">{stageInfo.label}</span>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
-                                </div>
-                            )}
-                        </button>
-                    ))}
+                                </button>
+                                )
+                            })}
                 </div>
 
                 {/* Generate all button */}
@@ -491,11 +556,11 @@ export default function EditorPage() {
                         className="w-full mt-3 px-4 py-2.5 rounded-xl bg-gradient-to-r from-aeon-blue to-aeon-violet text-white text-sm font-semibold hover:shadow-lg hover:shadow-aeon-blue/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         <Sparkles className="w-4 h-4" />
-                        Generate All ({pendingCount})
+                        Generate All ({sections.filter(s => !s.generated_answer && s.id !== generatingId).length})
                     </button>
                 )}
 
-                {/* Export Proposal button */}
+                {/* Export button */}
                 {selectedRFP && completedCount > 0 && (
                     <button
                         onClick={exportProposal}
@@ -534,24 +599,13 @@ export default function EditorPage() {
                                 </p>
                             </div>
                             <div className="flex items-center gap-2 ml-4 shrink-0">
-                                {activeSection.status === 'pending' && (
+                                {(activeSection.id !== generatingId && !activeSection.generated_answer) && (
                                     <button
                                         onClick={() => generateSection(activeSection.id)}
                                         disabled={!!generatingId}
                                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-aeon-blue/10 text-aeon-blue text-xs font-medium hover:bg-aeon-blue/15 transition-colors disabled:opacity-50"
                                     >
-                                        <Sparkles className="w-3.5 h-3.5" />
-                                        Generate
-                                    </button>
-                                )}
-                                {activeSection.status === 'error' && (
-                                    <button
-                                        onClick={() => generateSection(activeSection.id)}
-                                        disabled={!!generatingId}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-destructive/10 text-destructive text-xs font-medium hover:bg-destructive/15 transition-colors disabled:opacity-50"
-                                    >
-                                        <RefreshCw className="w-3.5 h-3.5" />
-                                        Retry
+                                        <><Sparkles className="w-3.5 h-3.5" /> Generate</>
                                     </button>
                                 )}
                                 {activeSection.id === generatingId && (
@@ -569,11 +623,11 @@ export default function EditorPage() {
                                     </div>
                                 )}
                                 <button
-                                    onClick={() => navigator.clipboard.writeText(editContent)}
+                                    onClick={handleCopy}
                                     className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                                     title="Copy"
                                 >
-                                    <Copy className="w-4 h-4" />
+                                    {copied ? <Check className="w-4 h-4 text-aeon-emerald" /> : <Copy className="w-4 h-4" />}
                                 </button>
                                 <button
                                     onClick={() => generateSection(activeSection.id)}
@@ -594,7 +648,7 @@ export default function EditorPage() {
                             </div>
                         )}
 
-                        {/* SSE progress bar for active section */}
+                        {/* SSE progress bar */}
                         {activeSection.id === generatingId && (
                             <div className="px-6 py-3 border-b border-border/30 bg-secondary/30">
                                 <div className="flex items-center justify-between mb-1.5">
@@ -615,11 +669,14 @@ export default function EditorPage() {
                             </div>
                         )}
 
-                        {/* Text area */}
+                        {/* Textarea */}
                         <div className="flex-1 p-6 overflow-y-auto">
                             <textarea
                                 value={editContent}
-                                onChange={(e) => setEditContent(e.target.value)}
+                                onChange={(e) => {
+                                    setEditContent(e.target.value)
+                                    if (saveState === 'saved') setSaveState('idle')
+                                }}
                                 onBlur={handleSave}
                                 disabled={activeSection.id === generatingId}
                                 placeholder={
@@ -648,14 +705,7 @@ export default function EditorPage() {
                                     </span>
                                 )}
                             </div>
-                            <button
-                                onClick={handleSave}
-                                disabled={activeSection.id === generatingId}
-                                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-aeon-emerald text-white text-xs font-semibold hover:bg-aeon-emerald/90 transition-colors disabled:opacity-50"
-                            >
-                                <Send className="w-3.5 h-3.5" />
-                                Save Section
-                            </button>
+                            <SaveButton />
                         </div>
                     </>
                 ) : loading ? (

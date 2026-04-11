@@ -1,12 +1,13 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
-
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useState } from 'react'
-import { Sparkles, Eye, EyeOff, ArrowRight, Chrome } from 'lucide-react'
+import { Sparkles, Eye, EyeOff, ArrowRight, Chrome, CheckCircle } from 'lucide-react'
 
 export default function SignupPage() {
+    const router = useRouter()
     const [showPassword, setShowPassword] = useState(false)
     const [loading, setLoading] = useState(false)
     const [form, setForm] = useState({
@@ -16,6 +17,7 @@ export default function SignupPage() {
         password: '',
     })
     const [errorMsg, setErrorMsg] = useState<string | null>(null)
+    const [successMsg, setSuccessMsg] = useState<string | null>(null)
 
     function update(field: string, value: string) {
         setForm((prev) => ({ ...prev, [field]: value }))
@@ -23,6 +25,7 @@ export default function SignupPage() {
 
     async function handleGoogleSignup() {
         setLoading(true)
+        setErrorMsg(null)
         const supabase = createClient()
         await supabase.auth.signInWithOAuth({
             provider: 'google',
@@ -36,43 +39,70 @@ export default function SignupPage() {
         e.preventDefault()
         setLoading(true)
         setErrorMsg(null)
+        setSuccessMsg(null)
+
         try {
-            const supabase = createClient()
-            
-            // 1. Sign up with Supabase Auth
-            const { data: authData, error: authError } = await supabase.auth.signUp({
-                email: form.email,
-                password: form.password,
+            const response = await fetch('/api/auth/signup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: form.email,
+                    password: form.password,
+                    fullName: form.name,
+                    company: form.company,
+                }),
             })
 
-            if (authError) throw new Error(authError.message)
-            
-            if (authData.user) {
-                // 2. Create Tenant manually (since no RLS is enforcing blocks on this table)
-                const { data: tenantData, error: tenantError } = await supabase.from('tenants').insert({
-                    company_name: form.company,
-                    plan_type: 'starter'
-                }).select().single()
+            const result = await response.json()
 
-                if (tenantError) throw new Error(`Tenant setup failed: ${tenantError.message}`)
-
-                // 3. Create User record
-                const { error: userError } = await supabase.from('users').insert({
-                    id: authData.user.id,
-                    email: form.email,
-                    full_name: form.name,
-                    tenant_id: tenantData.id,
-                    role: 'admin'
-                })
-
-                if (userError) throw new Error(`User setup failed: ${userError.message}`)
+            if (!response.ok) {
+                throw new Error(result.error || 'Signup failed')
             }
 
-            window.location.href = '/dashboard'
+            if (result.needsConfirmation) {
+                // Email confirmation is ON — show success message
+                setSuccessMsg(result.message)
+                setLoading(false)
+                return
+            }
+
+            // No email confirmation needed — go straight to dashboard
+            router.push('/dashboard')
+            router.refresh()
         } catch (err: any) {
             setErrorMsg(err.message)
             setLoading(false)
         }
+    }
+
+    // Show success (email confirmation sent) state
+    if (successMsg) {
+        return (
+            <div className="min-h-screen bg-background relative flex items-center justify-center px-4">
+                <div className="fixed inset-0 mesh-gradient pointer-events-none" />
+                <div className="relative z-10 w-full max-w-md">
+                    <div className="glass-card rounded-2xl p-10 text-center">
+                        <div className="w-16 h-16 rounded-2xl bg-aeon-emerald/10 flex items-center justify-center mx-auto mb-5">
+                            <CheckCircle className="w-8 h-8 text-aeon-emerald" />
+                        </div>
+                        <h1 className="text-2xl font-bold mb-3">Check your email</h1>
+                        <p className="text-sm text-muted-foreground mb-2">
+                            We sent a confirmation link to:
+                        </p>
+                        <p className="text-sm font-semibold text-foreground mb-6">{form.email}</p>
+                        <p className="text-xs text-muted-foreground mb-8">
+                            Click the link in the email to activate your account, then come back to sign in.
+                        </p>
+                        <Link
+                            href="/login"
+                            className="w-full h-11 rounded-lg bg-gradient-to-r from-aeon-blue to-aeon-violet text-white font-semibold text-sm hover:shadow-lg hover:shadow-aeon-blue/20 transition-all duration-300 flex items-center justify-center gap-2"
+                        >
+                            Go to Sign In <ArrowRight className="w-4 h-4" />
+                        </Link>
+                    </div>
+                </div>
+            </div>
+        )
     }
 
     return (
@@ -103,7 +133,7 @@ export default function SignupPage() {
                             type="button"
                             onClick={handleGoogleSignup}
                             disabled={loading}
-                            className="w-full h-11 flex items-center justify-center gap-3 rounded-lg bg-input border border-border text-foreground hover:bg-muted transition-all font-medium text-sm"
+                            className="w-full h-11 flex items-center justify-center gap-3 rounded-lg bg-input border border-border text-foreground hover:bg-muted transition-all font-medium text-sm disabled:opacity-50"
                         >
                             <Chrome className="w-4 h-4" />
                             Sign up with Google
@@ -165,12 +195,6 @@ export default function SignupPage() {
                             />
                         </div>
 
-                        {errorMsg && (
-                            <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
-                                {errorMsg}
-                            </div>
-                        )}
-
                         {/* Password */}
                         <div>
                             <label className="block text-sm font-medium text-foreground mb-1.5">
@@ -199,6 +223,12 @@ export default function SignupPage() {
                                 </button>
                             </div>
                         </div>
+
+                        {errorMsg && (
+                            <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
+                                {errorMsg}
+                            </div>
+                        )}
 
                         {/* Terms */}
                         <p className="text-xs text-muted-foreground">

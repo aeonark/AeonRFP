@@ -8,9 +8,8 @@ export function Topbar() {
     const router = useRouter()
 
     async function handleLogout() {
-        const supabase = createClient()
-        await supabase.auth.signOut()
-        router.push('/login')
+        await fetch('/api/auth/logout', { method: 'POST' })
+        window.location.href = '/login'
     }
 
     return (

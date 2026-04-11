@@ -8,10 +8,11 @@ import {
     Clock,
     RefreshCw as Repeat,
     Target,
-    Users,
+    CheckCircle2,
     Loader2,
     Inbox,
     Timer,
+    AlertCircle,
 } from 'lucide-react'
 import {
     AreaChart,
@@ -24,45 +25,39 @@ import {
     Tooltip,
     ResponsiveContainer,
     Cell,
+    PieChart,
+    Pie,
+    Legend,
 } from 'recharts'
 import { createClient } from '@/lib/supabase/client'
-
-// ============================================
-// Types
-// ============================================
-
-interface AnalyticsMetrics {
-    totalRFPs: number
-    avgConfidence: number
-    avgResponseTime: number
-    clauseReuseRate: number
-    winRate: number
-    totalClauses: number
-    answeredClauses: number
-    topPerformer: string
-}
-
-interface WinRateDataPoint {
-    month: string
-    rate: number
-}
-
-interface ClauseTypeDataPoint {
-    type: string
-    count: number
-}
 
 // ============================================
 // Chart colors
 // ============================================
 
 const CLAUSE_COLORS: Record<string, string> = {
-    technical: 'hsl(245, 80%, 67%)',
-    compliance: 'hsl(160, 70%, 50%)',
-    financial: 'hsl(40, 90%, 55%)',
+    technical:   'hsl(245, 80%, 67%)',
+    compliance:  'hsl(160, 70%, 50%)',
+    financial:   'hsl(40, 90%, 55%)',
     operational: 'hsl(190, 80%, 55%)',
-    legal: 'hsl(280, 60%, 60%)',
-    general: 'hsl(220, 10%, 60%)',
+    legal:       'hsl(280, 60%, 60%)',
+    general:     'hsl(220, 10%, 60%)',
+}
+
+const STATUS_COLORS: Record<string, string> = {
+    completed:  'hsl(160, 70%, 50%)',
+    processing: 'hsl(245, 80%, 67%)',
+    failed:     'hsl(0, 70%, 55%)',
+    pending:    'hsl(220, 10%, 60%)',
+    uploading:  'hsl(190, 80%, 55%)',
+}
+
+// ============================================
+// Helpers
+// ============================================
+
+function formatDate(isoString: string) {
+    return new Date(isoString).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 // ============================================
@@ -70,140 +65,37 @@ const CLAUSE_COLORS: Record<string, string> = {
 // ============================================
 
 export default function AnalyticsPage() {
-    const [metrics, setMetrics] = useState<AnalyticsMetrics | null>(null)
-    const [winRateData, setWinRateData] = useState<WinRateDataPoint[]>([])
-    const [clauseTypeData, setClauseTypeData] = useState<ClauseTypeDataPoint[]>([])
+    const [rfps, setRfps] = useState<any[]>([])
+    const [clauses, setClauses] = useState<any[]>([])
     const [loading, setLoading] = useState(true)
-    const [isEmpty, setIsEmpty] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const [lastRefresh, setLastRefresh] = useState(new Date())
 
-    useEffect(() => {
-        computeAnalytics()
-    }, [])
+    useEffect(() => { fetchData() }, [])
 
-    async function computeAnalytics() {
+    async function fetchData() {
         setLoading(true)
-
-        const supabase = createClient()
-        const [rfpsRes, clausesRes] = await Promise.all([
-            supabase.from('rfp_documents').select('*'),
-            supabase.from('clauses').select('*')
-        ])
-
-        const rfps = rfpsRes.data || []
-        const allClauses = clausesRes.data || []
-
-        if (rfps.length === 0 && allClauses.length === 0) {
-            setIsEmpty(true)
+        setError(null)
+        try {
+            const supabase = createClient()
+            const [rfpsRes, clausesRes] = await Promise.all([
+                supabase.from('rfp_documents').select('*').order('created_at', { ascending: true }),
+                supabase.from('clauses').select('*'),
+            ])
+            if (rfpsRes.error) throw rfpsRes.error
+            if (clausesRes.error) throw clausesRes.error
+            setRfps(rfpsRes.data || [])
+            setClauses(clausesRes.data || [])
+            setLastRefresh(new Date())
+        } catch (err: any) {
+            setError(err?.message || 'Failed to load analytics')
+        } finally {
             setLoading(false)
-            return
         }
-
-        setIsEmpty(false)
-
-        const totalRFPs = rfps.length
-        const totalClauses = allClauses.length
-
-        // Average Confidence Score
-        const clausesWithConfidence = allClauses.filter(
-            (c) => c.confidence_score != null && c.confidence_score > 0
-        )
-        const avgConfidence = clausesWithConfidence.length > 0
-            ? Math.round(
-                clausesWithConfidence.reduce((sum, c) => sum + (c.confidence_score || 0), 0) /
-                clausesWithConfidence.length
-            )
-            : 0
-
-        // Answered clauses (have generated_answer)
-        const answeredClauses = allClauses.filter((c) => c.generated_answer != null).length
-
-        // Clause Reuse Rate — ratio of answered clauses to total
-        const clauseReuseRate = totalClauses > 0
-            ? Math.round((answeredClauses / totalClauses) * 100)
-            : 0
-
-        // Win Rate — clauses with confidence > 75 as "predicted wins"
-        const highConfidenceClauses = clausesWithConfidence.filter(
-            (c) => (c.confidence_score || 0) > 75
-        )
-        const winRate = clausesWithConfidence.length > 0
-            ? Math.round((highConfidenceClauses.length / clausesWithConfidence.length) * 100)
-            : 0
-
-        // Avg Response Time — compute from RFP creation dates
-        const completedRFPs = rfps.filter((r) => r.status === 'completed')
-        let avgResponseTime = 0
-        if (completedRFPs.length > 0) {
-            const now = Date.now()
-            const totalHours = completedRFPs.reduce((sum, rfp) => {
-                const created = new Date(rfp.created_at).getTime()
-                return sum + (now - created) / (1000 * 60 * 60)
-            }, 0)
-            avgResponseTime = parseFloat((totalHours / completedRFPs.length).toFixed(1))
-        }
-
-        // Top performer — clause type with highest avg confidence
-        const typeConfidences: Record<string, { sum: number; count: number }> = {}
-        for (const c of clausesWithConfidence) {
-            const type = c.clause_type || 'general'
-            if (!typeConfidences[type]) typeConfidences[type] = { sum: 0, count: 0 }
-            typeConfidences[type].sum += c.confidence_score || 0
-            typeConfidences[type].count++
-        }
-        const topPerformer = Object.entries(typeConfidences)
-            .map(([type, data]) => ({ type, avg: data.sum / data.count }))
-            .sort((a, b) => b.avg - a.avg)[0]?.type || 'N/A'
-
-        setMetrics({
-            totalRFPs,
-            avgConfidence,
-            avgResponseTime,
-            clauseReuseRate,
-            winRate,
-            totalClauses,
-            answeredClauses,
-            topPerformer: topPerformer.charAt(0).toUpperCase() + topPerformer.slice(1),
-        })
-
-        // Win Rate Over Time (AreaChart)
-        const monthlyData: Record<string, { wins: number; total: number }> = {}
-        for (const c of clausesWithConfidence) {
-            const date = new Date(c.created_at)
-            const monthKey = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
-            if (!monthlyData[monthKey]) monthlyData[monthKey] = { wins: 0, total: 0 }
-            monthlyData[monthKey].total++
-            if ((c.confidence_score || 0) > 75) monthlyData[monthKey].wins++
-        }
-
-        const winRateTimeSeries = Object.entries(monthlyData)
-            .map(([month, data]) => ({
-                month,
-                rate: Math.round((data.wins / data.total) * 100),
-            }))
-            .slice(-7)
-
-        setWinRateData(winRateTimeSeries)
-
-        // Clause Types Distribution (BarChart)
-        const typeCounts: Record<string, number> = {}
-        for (const c of allClauses) {
-            const type = c.clause_type || 'general'
-            typeCounts[type] = (typeCounts[type] || 0) + 1
-        }
-
-        const typeDistribution = Object.entries(typeCounts)
-            .map(([type, count]) => ({
-                type: type.charAt(0).toUpperCase() + type.slice(1),
-                count,
-            }))
-            .sort((a, b) => b.count - a.count)
-
-        setClauseTypeData(typeDistribution)
-        setLoading(false)
     }
 
     // -----------------------------------
-    // Loading state
+    // Loading
     // -----------------------------------
     if (loading) {
         return (
@@ -217,14 +109,35 @@ export default function AnalyticsPage() {
     }
 
     // -----------------------------------
+    // Error
+    // -----------------------------------
+    if (error) {
+        return (
+            <div className="max-w-6xl mx-auto flex items-center justify-center py-32 animate-fade-in">
+                <div className="text-center">
+                    <AlertCircle className="w-10 h-10 text-destructive mx-auto mb-4" />
+                    <p className="text-sm font-medium mb-1">Failed to load analytics</p>
+                    <p className="text-xs text-muted-foreground mb-4">{error}</p>
+                    <button
+                        onClick={fetchData}
+                        className="px-4 py-2 rounded-lg bg-secondary text-xs font-medium hover:bg-accent transition-colors"
+                    >
+                        Try Again
+                    </button>
+                </div>
+            </div>
+        )
+    }
+
+    // -----------------------------------
     // Empty state
     // -----------------------------------
-    if (isEmpty || !metrics) {
+    if (rfps.length === 0) {
         return (
             <div className="max-w-6xl mx-auto flex items-center justify-center py-32 animate-fade-in">
                 <div className="text-center">
                     <Inbox className="w-10 h-10 text-muted-foreground mx-auto mb-4" />
-                    <p className="text-sm font-medium mb-1">No Analytics Data Yet</p>
+                    <p className="text-sm font-medium mb-1">No Data Yet</p>
                     <p className="text-xs text-muted-foreground mb-4">
                         Upload and process RFP documents to see analytics here.
                     </p>
@@ -239,26 +152,101 @@ export default function AnalyticsPage() {
         )
     }
 
-    // Estimated time saved: ~15 min per clause answered
-    const hoursSaved = Math.round((metrics.answeredClauses * 15) / 60)
+    // -----------------------------------
+    // Compute metrics from real data
+    // -----------------------------------
+    const totalRFPs = rfps.length
+    const completedRFPs = rfps.filter((r) => r.status === 'completed').length
+    const totalClauses = clauses.length
+    const answeredClauses = clauses.filter((c) => c.generated_answer != null).length
+
+    const clausesWithScore = clauses.filter((c) => c.confidence_score != null && c.confidence_score > 0)
+    const avgConfidence = clausesWithScore.length > 0
+        ? Math.round(clausesWithScore.reduce((s, c) => s + (c.confidence_score || 0), 0) / clausesWithScore.length)
+        : null
+
+    const completionRate = totalClauses > 0
+        ? Math.round((answeredClauses / totalClauses) * 100)
+        : 0
+
+    // Hours saved: ~15 min per answered clause
+    const hoursSaved = Math.round((answeredClauses * 15) / 60)
+
+    // Avg processing time (seconds) between upload and completion
+    const processedRFPs = rfps.filter((r) => r.status === 'completed' && r.updated_at && r.created_at)
+    const avgProcessingMin = processedRFPs.length > 0
+        ? Math.round(
+            processedRFPs.reduce((sum, r) => {
+                const diff = new Date(r.updated_at).getTime() - new Date(r.created_at).getTime()
+                return sum + diff / 60000
+            }, 0) / processedRFPs.length
+        )
+        : null
+
+    // -----------------------------------
+    // Chart data
+    // -----------------------------------
+
+    // RFP uploads over time (line chart per day)
+    const uploadsByDay: Record<string, number> = {}
+    for (const rfp of rfps) {
+        const day = formatDate(rfp.created_at)
+        uploadsByDay[day] = (uploadsByDay[day] || 0) + 1
+    }
+    const uploadTrend = Object.entries(uploadsByDay).map(([date, count]) => ({ date, count })).slice(-14)
+
+    // RFP status breakdown (pie)
+    const statusCounts: Record<string, number> = {}
+    for (const rfp of rfps) {
+        const s = rfp.status || 'unknown'
+        statusCounts[s] = (statusCounts[s] || 0) + 1
+    }
+    const statusPieData = Object.entries(statusCounts).map(([name, value]) => ({ name, value }))
+
+    // Clause type breakdown (bar)
+    const typeCounts: Record<string, number> = {}
+    for (const c of clauses) {
+        const t = c.clause_type || 'general'
+        typeCounts[t] = (typeCounts[t] || 0) + 1
+    }
+    const typeBarData = Object.entries(typeCounts)
+        .map(([type, count]) => ({
+            type: type.charAt(0).toUpperCase() + type.slice(1),
+            count,
+            rawType: type,
+        }))
+        .sort((a, b) => b.count - a.count)
+
+    // Clause completion over time
+    const answeredByDay: Record<string, { answered: number; total: number }> = {}
+    for (const c of clauses) {
+        const day = formatDate(c.created_at)
+        if (!answeredByDay[day]) answeredByDay[day] = { answered: 0, total: 0 }
+        answeredByDay[day].total++
+        if (c.generated_answer) answeredByDay[day].answered++
+    }
+    const completionTrend = Object.entries(answeredByDay)
+        .map(([date, d]) => ({ date, rate: Math.round((d.answered / d.total) * 100) }))
+        .slice(-14)
 
     // -----------------------------------
     // Render
     // -----------------------------------
     return (
         <div className="max-w-6xl mx-auto space-y-6 animate-fade-in">
+            {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-2xl font-bold flex items-center gap-2">
                         <BarChart3 className="w-6 h-6" />
                         Analytics Dashboard
                     </h1>
-                    <p className="text-sm text-muted-foreground mt-1">
-                        Performance insights across your RFP portfolio.
+                    <p className="text-xs text-muted-foreground mt-1">
+                        Last updated {lastRefresh.toLocaleTimeString()}
                     </p>
                 </div>
                 <button
-                    onClick={computeAnalytics}
+                    onClick={fetchData}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-secondary text-xs font-medium hover:bg-accent transition-colors"
                 >
                     <Repeat className="w-3.5 h-3.5" />
@@ -266,181 +254,287 @@ export default function AnalyticsPage() {
                 </button>
             </div>
 
-            {/* Stat cards */}
-            <div className="grid grid-cols-3 gap-4">
+            {/* KPI cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard
                     icon={<FileText className="w-5 h-5 text-aeon-blue" />}
-                    label="Total RFPs Processed"
-                    value={String(metrics.totalRFPs)}
-                    detail={metrics.totalClauses > 0 ? `${metrics.totalClauses} clauses` : undefined}
+                    label="Total RFPs"
+                    value={String(totalRFPs)}
+                    detail={`${completedRFPs} completed`}
+                    positive={completedRFPs > 0}
                 />
                 <StatCard
-                    icon={<TrendingUp className="w-5 h-5 text-aeon-emerald" />}
-                    label="Avg Win Rate"
-                    value={`${metrics.winRate}%`}
-                    detail={metrics.winRate > 0 ? `${metrics.winRate > 70 ? '+' : ''}${metrics.winRate - 70}% vs baseline` : undefined}
-                    positive={metrics.winRate > 70}
-                />
-                <StatCard
-                    icon={<Clock className="w-5 h-5 text-aeon-cyan" />}
-                    label="Avg Response Time"
-                    value={metrics.avgResponseTime > 0 ? `${metrics.avgResponseTime}h` : '—'}
-                    detail={metrics.avgResponseTime > 0 ? 'from upload to complete' : undefined}
-                />
-                <StatCard
-                    icon={<Repeat className="w-5 h-5 text-aeon-violet" />}
-                    label="Clause Reuse Rate"
-                    value={`${metrics.clauseReuseRate}%`}
-                    detail={`${metrics.answeredClauses} / ${metrics.totalClauses} answered`}
+                    icon={<CheckCircle2 className="w-5 h-5 text-aeon-emerald" />}
+                    label="Clauses Answered"
+                    value={`${answeredClauses}/${totalClauses}`}
+                    detail={totalClauses > 0 ? `${completionRate}% completion` : undefined}
+                    positive={completionRate >= 50}
                 />
                 <StatCard
                     icon={<Target className="w-5 h-5 text-chart-4" />}
-                    label="Avg Confidence Score"
-                    value={`${metrics.avgConfidence}%`}
-                    detail={metrics.avgConfidence >= 80 ? 'Above target' : metrics.avgConfidence > 0 ? 'Below target' : undefined}
-                    positive={metrics.avgConfidence >= 80}
+                    label="Avg Confidence"
+                    value={avgConfidence !== null ? `${avgConfidence}%` : '—'}
+                    detail={avgConfidence !== null
+                        ? avgConfidence >= 80 ? 'Above target ✓' : 'Below 80% target'
+                        : 'Generate clauses to see score'}
+                    positive={avgConfidence !== null && avgConfidence >= 80}
                 />
                 <StatCard
-                    icon={<Users className="w-5 h-5 text-aeon-blue" />}
-                    label="Top Performer"
-                    value={metrics.topPerformer}
-                    detail={metrics.topPerformer !== 'N/A' ? 'highest confidence' : undefined}
+                    icon={<Clock className="w-5 h-5 text-aeon-cyan" />}
+                    label="Avg Processing"
+                    value={avgProcessingMin !== null ? `${avgProcessingMin}m` : '—'}
+                    detail={avgProcessingMin !== null ? 'upload to complete' : 'No completed RFPs yet'}
                 />
             </div>
 
-            {/* Charts */}
+            {/* Charts row 1 */}
             <div className="grid grid-cols-2 gap-4">
-                {/* Win Rate Over Time */}
+                {/* Upload trend */}
                 <div className="glass-card rounded-xl p-6">
-                    <h3 className="text-base font-semibold mb-1">Win Rate Trend</h3>
-                    <p className="text-xs text-muted-foreground mb-6">
-                        Monthly proposal win rate (confidence &gt; 75%)
-                    </p>
-                    {winRateData.length > 0 ? (
-                        <ResponsiveContainer width="100%" height={220}>
-                            <AreaChart data={winRateData}>
+                    <h3 className="text-base font-semibold mb-1">RFP Upload Activity</h3>
+                    <p className="text-xs text-muted-foreground mb-5">Documents uploaded per day</p>
+                    {uploadTrend.length > 1 ? (
+                        <ResponsiveContainer width="100%" height={200}>
+                            <AreaChart data={uploadTrend}>
                                 <defs>
-                                    <linearGradient id="winGradient" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="0%" stopColor="hsl(245, 80%, 67%)" stopOpacity={0.3} />
+                                    <linearGradient id="uploadGrad" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%"   stopColor="hsl(245, 80%, 67%)" stopOpacity={0.3} />
                                         <stop offset="100%" stopColor="hsl(245, 80%, 67%)" stopOpacity={0} />
                                     </linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 20%)" />
-                                <XAxis
-                                    dataKey="month"
-                                    tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 11 }}
-                                    axisLine={false}
-                                    tickLine={false}
-                                />
-                                <YAxis
-                                    tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 11 }}
-                                    axisLine={false}
-                                    tickLine={false}
-                                    domain={[0, 100]}
-                                    tickFormatter={(v) => `${v}%`}
-                                />
+                                <XAxis dataKey="date" tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 10 }} axisLine={false} tickLine={false} />
+                                <YAxis tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
                                 <Tooltip
-                                    contentStyle={{
-                                        background: 'hsl(220, 20%, 12%)',
-                                        border: '1px solid hsl(220, 15%, 25%)',
-                                        borderRadius: '8px',
-                                        fontSize: '12px',
-                                    }}
-                                    formatter={(value: number) => [`${value}%`, 'Win Rate']}
+                                    contentStyle={{ background: 'hsl(220, 20%, 12%)', border: '1px solid hsl(220, 15%, 25%)', borderRadius: '8px', fontSize: '12px' }}
+                                    formatter={(v: number) => [v, 'Uploads']}
                                 />
-                                <Area
-                                    type="monotone"
-                                    dataKey="rate"
-                                    stroke="hsl(245, 80%, 67%)"
-                                    strokeWidth={2}
-                                    fill="url(#winGradient)"
-                                />
+                                <Area type="monotone" dataKey="count" stroke="hsl(245, 80%, 67%)" strokeWidth={2} fill="url(#uploadGrad)" />
                             </AreaChart>
                         </ResponsiveContainer>
                     ) : (
-                        <div className="h-[220px] flex items-center justify-center text-xs text-muted-foreground">
-                            Process more RFPs to see trend data.
-                        </div>
+                        <SingleRFPBar rfps={rfps} />
                     )}
                 </div>
 
-                {/* Clause Types Distribution */}
+                {/* Clause types */}
                 <div className="glass-card rounded-xl p-6">
-                    <h3 className="text-base font-semibold mb-1">Clause Types Distribution</h3>
-                    <p className="text-xs text-muted-foreground mb-6">
-                        Breakdown of extracted clauses by category
-                    </p>
-                    {clauseTypeData.length > 0 ? (
-                        <ResponsiveContainer width="100%" height={220}>
-                            <BarChart data={clauseTypeData}>
+                    <h3 className="text-base font-semibold mb-1">Clause Types</h3>
+                    <p className="text-xs text-muted-foreground mb-5">Distribution by category</p>
+                    {typeBarData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={200}>
+                            <BarChart data={typeBarData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 20%)" />
-                                <XAxis
-                                    dataKey="type"
-                                    tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 11 }}
-                                    axisLine={false}
-                                    tickLine={false}
-                                />
-                                <YAxis
-                                    tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 11 }}
-                                    axisLine={false}
-                                    tickLine={false}
-                                />
+                                <XAxis dataKey="type" tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 10 }} axisLine={false} tickLine={false} />
+                                <YAxis tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
                                 <Tooltip
-                                    contentStyle={{
-                                        background: 'hsl(220, 20%, 12%)',
-                                        border: '1px solid hsl(220, 15%, 25%)',
-                                        borderRadius: '8px',
-                                        fontSize: '12px',
-                                    }}
-                                    formatter={(value: number) => [value, 'Clauses']}
+                                    contentStyle={{ background: 'hsl(220, 20%, 12%)', border: '1px solid hsl(220, 15%, 25%)', borderRadius: '8px', fontSize: '12px' }}
+                                    formatter={(v: number) => [v, 'Clauses']}
                                 />
                                 <Bar dataKey="count" radius={[6, 6, 0, 0]}>
-                                    {clauseTypeData.map((entry) => (
+                                    {typeBarData.map((entry) => (
                                         <Cell
                                             key={entry.type}
-                                            fill={CLAUSE_COLORS[entry.type.toLowerCase()] || CLAUSE_COLORS.general}
+                                            fill={CLAUSE_COLORS[entry.rawType] || CLAUSE_COLORS.general}
                                         />
                                     ))}
                                 </Bar>
                             </BarChart>
                         </ResponsiveContainer>
                     ) : (
-                        <div className="h-[220px] flex items-center justify-center text-xs text-muted-foreground">
-                            No clause data available yet.
+                        <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">
+                            No clause data yet — upload and process an RFP.
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* Time saved callout */}
+            {/* Charts row 2 */}
+            <div className="grid grid-cols-2 gap-4">
+                {/* RFP status breakdown */}
+                <div className="glass-card rounded-xl p-6">
+                    <h3 className="text-base font-semibold mb-1">RFP Status Breakdown</h3>
+                    <p className="text-xs text-muted-foreground mb-5">Processing state across all documents</p>
+                    {statusPieData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={200}>
+                            <PieChart>
+                                <Pie
+                                    data={statusPieData}
+                                    dataKey="value"
+                                    nameKey="name"
+                                    cx="50%"
+                                    cy="50%"
+                                    innerRadius={50}
+                                    outerRadius={80}
+                                    paddingAngle={3}
+                                >
+                                    {statusPieData.map((entry) => (
+                                        <Cell
+                                            key={entry.name}
+                                            fill={STATUS_COLORS[entry.name] || 'hsl(220, 10%, 60%)'}
+                                        />
+                                    ))}
+                                </Pie>
+                                <Tooltip
+                                    contentStyle={{ background: 'hsl(220, 20%, 12%)', border: '1px solid hsl(220, 15%, 25%)', borderRadius: '8px', fontSize: '12px' }}
+                                />
+                                <Legend
+                                    formatter={(value) => (
+                                        <span style={{ color: 'hsl(220, 10%, 70%)', fontSize: 11 }}>
+                                            {value.charAt(0).toUpperCase() + value.slice(1)}
+                                        </span>
+                                    )}
+                                />
+                            </PieChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">
+                            No RFPs found.
+                        </div>
+                    )}
+                </div>
+
+                {/* Clause completion trend */}
+                <div className="glass-card rounded-xl p-6">
+                    <h3 className="text-base font-semibold mb-1">Clause Completion Rate</h3>
+                    <p className="text-xs text-muted-foreground mb-5">% of clauses with AI responses over time</p>
+                    {completionTrend.length > 1 ? (
+                        <ResponsiveContainer width="100%" height={200}>
+                            <AreaChart data={completionTrend}>
+                                <defs>
+                                    <linearGradient id="complGrad" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%"   stopColor="hsl(160, 70%, 50%)" stopOpacity={0.3} />
+                                        <stop offset="100%" stopColor="hsl(160, 70%, 50%)" stopOpacity={0} />
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 20%)" />
+                                <XAxis dataKey="date" tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 10 }} axisLine={false} tickLine={false} />
+                                <YAxis tick={{ fill: 'hsl(220, 10%, 50%)', fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
+                                <Tooltip
+                                    contentStyle={{ background: 'hsl(220, 20%, 12%)', border: '1px solid hsl(220, 15%, 25%)', borderRadius: '8px', fontSize: '12px' }}
+                                    formatter={(v: number) => [`${v}%`, 'Completion']}
+                                />
+                                <Area type="monotone" dataKey="rate" stroke="hsl(160, 70%, 50%)" strokeWidth={2} fill="url(#complGrad)" />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">
+                            {clauses.length === 0
+                                ? 'No clauses processed yet.'
+                                : `${completionRate}% of clauses answered (${answeredClauses}/${totalClauses})`}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Time saved banner */}
             {hoursSaved > 0 && (
                 <div className="glass-card rounded-xl p-6 flex items-center gap-4 bg-gradient-to-r from-aeon-blue/5 to-aeon-violet/5 border-aeon-blue/10">
                     <div className="w-12 h-12 rounded-xl bg-aeon-blue/10 flex items-center justify-center shrink-0">
                         <Timer className="w-6 h-6 text-aeon-blue" />
                     </div>
                     <div>
-                        <div className="text-lg font-bold gradient-text">{hoursSaved} Hours Saved</div>
+                        <div className="text-2xl font-bold gradient-text">{hoursSaved} Hours Saved</div>
                         <p className="text-xs text-muted-foreground">
-                            Estimated time saved by AI-generated responses across {metrics.answeredClauses} clauses
+                            Estimated time saved by AI-generated responses across {answeredClauses} clauses
                             (~15 min per clause vs manual drafting)
                         </p>
                     </div>
+                    {avgConfidence !== null && (
+                        <div className="ml-auto text-right shrink-0">
+                            <div className={`text-2xl font-bold ${avgConfidence >= 80 ? 'text-aeon-emerald' : 'text-chart-4'}`}>
+                                {avgConfidence}%
+                            </div>
+                            <div className="text-xs text-muted-foreground">avg confidence</div>
+                        </div>
+                    )}
                 </div>
             )}
+
+            {/* Recent RFPs table */}
+            <div className="glass-card rounded-xl p-6">
+                <h3 className="text-base font-semibold mb-4 flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4" />
+                    Recent Documents
+                </h3>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                        <thead>
+                            <tr className="text-muted-foreground border-b border-border/50">
+                                <th className="text-left pb-2 font-medium">Name</th>
+                                <th className="text-left pb-2 font-medium">Status</th>
+                                <th className="text-left pb-2 font-medium">Clauses</th>
+                                <th className="text-left pb-2 font-medium">Uploaded</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border/30">
+                            {rfps.slice(-10).reverse().map((rfp) => (
+                                <tr key={rfp.id} className="hover:bg-secondary/20 transition-colors">
+                                    <td className="py-2.5 pr-4 font-medium truncate max-w-[200px]">
+                                        {rfp.name || `RFP #${rfp.id.slice(0, 8)}`}
+                                    </td>
+                                    <td className="py-2.5 pr-4">
+                                        <span className={`px-2 py-0.5 rounded-full font-medium ${rfp.status === 'completed' ? 'bg-aeon-emerald/10 text-aeon-emerald' :
+                                            rfp.status === 'processing' ? 'bg-aeon-blue/10 text-aeon-blue' :
+                                            rfp.status === 'failed' ? 'bg-destructive/10 text-destructive' :
+                                            'bg-muted text-muted-foreground'}`}>
+                                            {rfp.status}
+                                        </span>
+                                    </td>
+                                    <td className="py-2.5 pr-4 text-muted-foreground">
+                                        {rfp.clause_count ?? '—'}
+                                    </td>
+                                    <td className="py-2.5 text-muted-foreground">
+                                        {formatDate(rfp.created_at)}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     )
 }
 
 // ============================================
-// Stat Card Component
+// Single RFP fallback bar (when only 1 upload)
+// ============================================
+
+function SingleRFPBar({ rfps }: { rfps: any[] }) {
+    const statuses = ['completed', 'processing', 'failed', 'pending']
+    const counts = statuses.map((s) => ({
+        name: s.charAt(0).toUpperCase() + s.slice(1),
+        count: rfps.filter((r) => r.status === s).length,
+    })).filter((s) => s.count > 0)
+
+    return (
+        <div className="h-[200px] flex flex-col justify-center gap-3">
+            {counts.map((s) => (
+                <div key={s.name} className="flex items-center gap-3">
+                    <span className="w-20 text-[11px] text-muted-foreground text-right">{s.name}</span>
+                    <div className="flex-1 h-5 rounded-full bg-secondary overflow-hidden">
+                        <div
+                            className="h-full rounded-full"
+                            style={{
+                                width: `${(s.count / rfps.length) * 100}%`,
+                                background: STATUS_COLORS[s.name.toLowerCase()] || 'hsl(220, 10%, 60%)',
+                            }}
+                        />
+                    </div>
+                    <span className="text-[11px] font-medium w-4">{s.count}</span>
+                </div>
+            ))}
+        </div>
+    )
+}
+
+// ============================================
+// Stat Card
 // ============================================
 
 function StatCard({
-    icon,
-    label,
-    value,
-    detail,
-    positive,
+    icon, label, value, detail, positive,
 }: {
     icon: React.ReactNode
     label: string
@@ -454,7 +548,7 @@ function StatCard({
                 <div className="w-9 h-9 rounded-lg bg-secondary flex items-center justify-center">
                     {icon}
                 </div>
-                <span className="text-xs text-muted-foreground">{label}</span>
+                <span className="text-xs text-muted-foreground leading-tight">{label}</span>
             </div>
             <div className="text-2xl font-bold">{value}</div>
             {detail && (

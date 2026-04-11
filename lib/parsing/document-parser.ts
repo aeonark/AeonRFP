@@ -2,7 +2,7 @@
  * Document Parser — Real Text Extraction
  * Supports PDF, DOCX, and XLSX file formats.
  *
- * PDF  → pdfjs-dist (legacy build, Node-compatible)
+ * PDF  → pdf-parse (internal lib path to avoid DOMMatrix crash)
  * DOCX → mammoth
  * XLSX → xlsx (SheetJS)
  */
@@ -10,15 +10,23 @@
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
 
-// 1. Mock out visual layout APIs that don't exist in Serverless Node.js
+// Polyfill browser-only APIs that pdf-parse tries to access at module load time
 if (typeof globalThis.DOMMatrix === 'undefined') {
-    globalThis.DOMMatrix = class DOMMatrix {} as any;
+    (globalThis as any).DOMMatrix = class DOMMatrix {
+        constructor() {}
+        static fromMatrix() { return new (globalThis as any).DOMMatrix() }
+    }
 }
 if (typeof globalThis.Path2D === 'undefined') {
-    globalThis.Path2D = class Path2D {} as any;
+    (globalThis as any).Path2D = class Path2D {}
 }
-// 2. Excluded from Webpack in next.config.mjs to prevent module corruption
-const pdfParse = require('pdf-parse')
+
+// pdf-parse v1.1.1 exports the parse function directly as module.exports
+// DOMMatrix polyfill above must run BEFORE this require() call
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdfParse: (buffer: Buffer) => Promise<{ text: string; numpages: number; info: any }> =
+    require('pdf-parse')
+
 
 // ============================================
 // Types

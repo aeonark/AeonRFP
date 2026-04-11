@@ -2,12 +2,15 @@
 
 import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
-import { useState } from 'react'
-import { Sparkles, Eye, EyeOff, ArrowRight, Mail, Chrome } from 'lucide-react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { useState, useEffect, Suspense } from 'react'
+import { Sparkles, Eye, EyeOff, ArrowRight, Chrome } from 'lucide-react'
 
 type AuthMode = 'password' | 'otp' | 'verify_otp'
 
-export default function LoginPage() {
+function LoginForm() {
+    const router = useRouter()
+    const searchParams = useSearchParams()
     const [authMode, setAuthMode] = useState<AuthMode>('password')
     const [showPassword, setShowPassword] = useState(false)
     const [loading, setLoading] = useState(false)
@@ -16,17 +19,32 @@ export default function LoginPage() {
     const [token, setToken] = useState('')
     const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
+    // Show error from callback redirect (e.g. expired link)
+    useEffect(() => {
+        const error = searchParams.get('error')
+        if (error) setErrorMsg(decodeURIComponent(error))
+    }, [searchParams])
+
     async function handlePasswordLogin(e: React.FormEvent) {
         e.preventDefault()
         setLoading(true)
         setErrorMsg(null)
         try {
-            const supabase = createClient()
-            const { error } = await supabase.auth.signInWithPassword({
-                email,
-                password,
+            // Use server-side login so cookies are set server-side
+            // and immediately readable by proxy.ts on next request
+            const response = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password }),
             })
-            if (error) throw new Error(error.message)
+
+            const result = await response.json()
+
+            if (!response.ok) {
+                throw new Error(result.error || 'Login failed')
+            }
+
+            // Hard navigate — browser uses newly-set server cookies
             window.location.href = '/dashboard'
         } catch (err: any) {
             setErrorMsg(err.message)
@@ -43,7 +61,7 @@ export default function LoginPage() {
             const { error } = await supabase.auth.signInWithOtp({
                 email,
                 options: {
-                    shouldCreateUser: true
+                    shouldCreateUser: false, // Don't create new users from OTP login
                 }
             })
             if (error) throw new Error(error.message)
@@ -61,12 +79,14 @@ export default function LoginPage() {
         setErrorMsg(null)
         try {
             const supabase = createClient()
-            const { error } = await supabase.auth.verifyOtp({
+            const { data, error } = await supabase.auth.verifyOtp({
                 email,
                 token,
                 type: 'email'
             })
             if (error) throw new Error(error.message)
+            if (!data.session) throw new Error('OTP verification failed. Please try again.')
+
             window.location.href = '/dashboard'
         } catch (err: any) {
             setErrorMsg(err.message)
@@ -76,13 +96,18 @@ export default function LoginPage() {
 
     async function handleGoogleLogin() {
         setLoading(true)
+        setErrorMsg(null)
         const supabase = createClient()
-        await supabase.auth.signInWithOAuth({
+        const { error } = await supabase.auth.signInWithOAuth({
             provider: 'google',
             options: {
                 redirectTo: `${window.location.origin}/auth/callback`
             }
         })
+        if (error) {
+            setErrorMsg(error.message)
+            setLoading(false)
+        }
     }
 
     return (
@@ -114,7 +139,7 @@ export default function LoginPage() {
                             type="button"
                             onClick={handleGoogleLogin}
                             disabled={loading}
-                            className="w-full h-11 flex items-center justify-center gap-3 rounded-lg bg-input border border-border text-foreground hover:bg-muted transition-all font-medium text-sm"
+                            className="w-full h-11 flex items-center justify-center gap-3 rounded-lg bg-input border border-border text-foreground hover:bg-muted transition-all font-medium text-sm disabled:opacity-50"
                         >
                             <Chrome className="w-4 h-4" />
                             Continue with Google
@@ -142,6 +167,7 @@ export default function LoginPage() {
                                     onChange={(e) => setToken(e.target.value)}
                                     placeholder="000000"
                                     required
+                                    maxLength={6}
                                     className="w-full h-14 text-center tracking-widest text-2xl font-bold rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-aeon-blue/50 transition-all"
                                 />
                             </div>
@@ -166,10 +192,10 @@ export default function LoginPage() {
 
                             <button
                                 type="button"
-                                onClick={() => setAuthMode('otp')}
+                                onClick={() => { setAuthMode('otp'); setToken(''); setErrorMsg(null) }}
                                 className="w-full text-sm text-muted-foreground hover:text-foreground text-center"
                             >
-                                Did not receive a code? Try again
+                                Didn&apos;t receive a code? Try again
                             </button>
                         </form>
                     ) : (
@@ -189,12 +215,6 @@ export default function LoginPage() {
                                 />
                             </div>
 
-                            {errorMsg && (
-                                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
-                                    {errorMsg}
-                                </div>
-                            )}
-
                             {/* Password - only show in password mode */}
                             {authMode === 'password' && (
                                 <div>
@@ -205,6 +225,7 @@ export default function LoginPage() {
                                         <button
                                             type="button"
                                             className="text-xs text-aeon-blue hover:underline"
+                                            onClick={() => setAuthMode('otp')}
                                         >
                                             Forgot password?
                                         </button>
@@ -233,6 +254,12 @@ export default function LoginPage() {
                                 </div>
                             )}
 
+                            {errorMsg && (
+                                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
+                                    {errorMsg}
+                                </div>
+                            )}
+
                             {/* Submit */}
                             <button
                                 type="submit"
@@ -252,10 +279,10 @@ export default function LoginPage() {
                             {/* Toggle Auth Mode */}
                             <button
                                 type="button"
-                                onClick={() => setAuthMode(authMode === 'password' ? 'otp' : 'password')}
+                                onClick={() => { setAuthMode(authMode === 'password' ? 'otp' : 'password'); setErrorMsg(null) }}
                                 className="w-full text-sm text-aeon-blue hover:underline text-center"
                             >
-                                {authMode === 'password' ? 'Sign in with One-Time Password' : 'Sign in with Password instead'}
+                                {authMode === 'password' ? 'Sign in with One-Time Password instead' : 'Sign in with Password instead'}
                             </button>
                         </form>
                     )}
@@ -269,5 +296,17 @@ export default function LoginPage() {
                 </div>
             </div>
         </div>
+    )
+}
+
+export default function LoginPage() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen bg-background flex items-center justify-center">
+                <div className="w-8 h-8 border-2 border-aeon-blue/30 border-t-aeon-blue rounded-full animate-spin" />
+            </div>
+        }>
+            <LoginForm />
+        </Suspense>
     )
 }
