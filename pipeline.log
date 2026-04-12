@@ -180,3 +180,5 @@
 [2026-04-11T20:24:00.566Z] [UPLOAD-RFP] 16. Request perfectly completed 
 [2026-04-11T20:24:00.872Z] [UPLOAD-RFP] 14. Fetch completed {"status":200,"ok":true}
 [2026-04-11T20:24:00.874Z] [UPLOAD-RFP] 16. Request perfectly completed 
+[2026-04-12T20:32:04.373Z] [PROCESS-RFP] 1. Background Process Triggered 
+[2026-04-12T20:32:04.433Z] [PROCESS-RFP] 2. Parsed Request {"rfp_id":"d2dfdd9d-ef7e-4202-8796-ff1cf3aa9fc1","tenant_id":"bda5e827-e799-42c5-8b34-eb612838d06e"}

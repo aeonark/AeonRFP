@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import * as Tabs from '@radix-ui/react-tabs'
 import {
     Upload,
     FileText,
@@ -14,8 +15,11 @@ import {
     Brain,
     Search,
     FileCheck,
+    HardDrive,
+    Mail
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { GmailInbox } from '@/components/upload/GmailInbox'
 
 type FileStatus =
     | 'idle'
@@ -69,6 +73,16 @@ export default function UploadPage() {
     const [dragOver, setDragOver] = useState(false)
     const [allDone, setAllDone] = useState(false)
     const fileInputRef = useRef<File[]>([]) // Store actual File objects
+    
+    const [activeTab, setActiveTab] = useState('local')
+
+    useEffect(() => {
+        // Automatically switch to Gmail tab if redirected back from Google OAuth
+        const urlParams = new URLSearchParams(window.location.search)
+        if (urlParams.get('tab') === 'gmail' || urlParams.get('success') === 'gmail_connected') {
+            setActiveTab('gmail')
+        }
+    }, [])
 
     function validateFile(file: File): string | null {
         if (!ALLOWED_TYPES.includes(file.type))
@@ -207,60 +221,96 @@ export default function UploadPage() {
                 </p>
             </div>
 
-            {/* Drop zone */}
-            <div
-                onDragOver={(e) => {
-                    e.preventDefault()
-                    setDragOver(true)
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={(e) => {
-                    e.preventDefault()
-                    setDragOver(false)
-                    handleFiles(e.dataTransfer.files)
-                }}
-                className={`relative border-2 border-dashed rounded-2xl p-12 text-center transition-all duration-300 ${dragOver
-                    ? 'border-aeon-blue bg-aeon-blue/5 scale-[1.01]'
-                    : 'border-border/60 hover:border-border'
-                    }`}
-            >
-                <div className="flex flex-col items-center gap-4">
+            <Tabs.Root value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+                <Tabs.List className="inline-flex h-11 items-center justify-center rounded-xl bg-secondary/50 p-1 text-muted-foreground w-full sm:w-auto">
+                    <Tabs.Trigger 
+                        value="local" 
+                        className="inline-flex items-center justify-center whitespace-nowrap rounded-lg px-6 py-2 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm gap-2"
+                    >
+                        <HardDrive className="w-4 h-4" />
+                        Local Upload
+                    </Tabs.Trigger>
+                    <Tabs.Trigger 
+                        value="gmail" 
+                        className="inline-flex items-center justify-center whitespace-nowrap rounded-lg px-6 py-2 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-[#ea4335]/10 data-[state=active]:text-[#ea4335] data-[state=active]:shadow-sm gap-2"
+                    >
+                        <Mail className="w-4 h-4" />
+                        Gmail Inbox
+                    </Tabs.Trigger>
+                </Tabs.List>
+
+                <Tabs.Content value="local" className="focus:outline-none space-y-8 animate-fade-in">
+                    {/* Drop zone */}
                     <div
-                        className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all ${dragOver ? 'bg-aeon-blue/15' : 'bg-secondary'
+                        onDragOver={(e) => {
+                            e.preventDefault()
+                            setDragOver(true)
+                        }}
+                        onDragLeave={() => setDragOver(false)}
+                        onDrop={(e) => {
+                            e.preventDefault()
+                            setDragOver(false)
+                            handleFiles(e.dataTransfer.files)
+                        }}
+                        className={`relative border-2 border-dashed rounded-2xl p-12 text-center transition-all duration-300 ${dragOver
+                            ? 'border-aeon-blue bg-aeon-blue/5 scale-[1.01]'
+                            : 'border-border/60 hover:border-border'
                             }`}
                     >
-                        <Upload
-                            className={`w-7 h-7 transition-colors ${dragOver
-                                ? 'text-aeon-blue'
-                                : 'text-muted-foreground'
-                                }`}
-                        />
+                        <div className="flex flex-col items-center gap-4">
+                            <div
+                                className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all ${dragOver ? 'bg-aeon-blue/15' : 'bg-secondary'
+                                    }`}
+                            >
+                                <Upload
+                                    className={`w-7 h-7 transition-colors ${dragOver
+                                        ? 'text-aeon-blue'
+                                        : 'text-muted-foreground'
+                                        }`}
+                                />
+                            </div>
+                            <div>
+                                <p className="text-base font-medium">
+                                    {dragOver
+                                        ? 'Drop to upload'
+                                        : 'Drag & drop your RFP document'}
+                                </p>
+                                <p className="text-sm text-muted-foreground mt-1">
+                                    PDF, DOCX, or XLSX — up to 50MB
+                                </p>
+                            </div>
+                            <label className="px-5 py-2.5 rounded-lg bg-secondary text-sm font-medium cursor-pointer hover:bg-accent transition-colors">
+                                Browse Files
+                                <input
+                                    type="file"
+                                    className="hidden"
+                                    accept=".pdf,.docx,.xlsx"
+                                    multiple
+                                    onChange={(e) => {
+                                        handleFiles(e.target.files)
+                                        e.target.value = ''
+                                    }}
+                                />
+                            </label>
+                        </div>
                     </div>
-                    <div>
-                        <p className="text-base font-medium">
-                            {dragOver
-                                ? 'Drop to upload'
-                                : 'Drag & drop your RFP document'}
-                        </p>
-                        <p className="text-sm text-muted-foreground mt-1">
-                            PDF, DOCX, or XLSX — up to 50MB
-                        </p>
-                    </div>
-                    <label className="px-5 py-2.5 rounded-lg bg-secondary text-sm font-medium cursor-pointer hover:bg-accent transition-colors">
-                        Browse Files
-                        <input
-                            type="file"
-                            className="hidden"
-                            accept=".pdf,.docx,.xlsx"
-                            multiple
-                            onChange={(e) => {
-                                handleFiles(e.target.files)
-                                e.target.value = ''
-                            }}
-                        />
-                    </label>
-                </div>
-            </div>
+                </Tabs.Content>
+
+                <Tabs.Content value="gmail" className="focus:outline-none animate-fade-in">
+                    <GmailInbox 
+                        onFileStarted={(rfpId, filename) => {
+                            // Tell the user to go to clauses dashboard.
+                            // In a robust implementation, this would track the "background processing"
+                            setAllDone(true)
+                            setFiles([{ 
+                                name: filename, size: 0, type: 'email', progress: 100, 
+                                status: 'complete', file: new File([], ''),
+                                clausesFound: 1 // mock since it processes in bg
+                            }])
+                        }} 
+                    />
+                </Tabs.Content>
+            </Tabs.Root>
 
             {/* File list */}
             {files.length > 0 && (

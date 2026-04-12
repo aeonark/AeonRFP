@@ -2,10 +2,29 @@
 
 import { Bell, Search, User, LogOut } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
 export function Topbar() {
     const router = useRouter()
+    const [userEmail, setUserEmail] = useState<string | null>(null)
+    const [isAdmin, setIsAdmin] = useState(false)
+
+    useEffect(() => {
+        const fetchUser = async () => {
+            const supabase = createClient()
+            const { data: { user } } = await supabase.auth.getUser()
+            
+            if (user?.email) {
+                setUserEmail(user.email)
+                const adminEmails = ['aeonark.lab@gmail.com', 'aeonark.labs@gmail.com']
+                if (adminEmails.includes(user.email.toLowerCase())) {
+                    setIsAdmin(true)
+                }
+            }
+        }
+        fetchUser()
+    }, [])
 
     async function handleLogout() {
         await fetch('/api/auth/logout', { method: 'POST' })
@@ -46,8 +65,12 @@ export function Topbar() {
                 {/* User */}
                 <div className="flex items-center gap-3">
                     <div className="text-right hidden sm:block">
-                        <div className="text-sm font-medium">Admin User</div>
-                        <div className="text-xs text-muted-foreground">Aeonark Labs</div>
+                        <div className="text-sm font-medium">
+                            {isAdmin ? 'System Admin' : userEmail?.split('@')[0] || 'User'}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                            {isAdmin ? 'Aeonark Labs' : userEmail || 'Member'}
+                        </div>
                     </div>
                     <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-aeon-blue to-aeon-violet flex items-center justify-center">
                         <User className="w-4 h-4 text-white" />

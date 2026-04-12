@@ -6,7 +6,7 @@
 import { getCachedEmbedding, setCachedEmbedding } from '@/lib/cost/embedding-cache'
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ''
-const EMBEDDING_MODEL = 'text-embedding-004'
+const EMBEDDING_MODEL = 'embedding-001'
 
 /**
  * Generate embedding vector for text.
